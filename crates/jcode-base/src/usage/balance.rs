@@ -542,6 +542,18 @@ mod tests {
         assert_eq!(partial.limits.len(), 1);
         assert_eq!(partial.limits[0].usage_percent, 100.0);
         assert!(partial.limits[0].resets_at.is_none());
+
+        // Numeric strings and millisecond epochs are accepted in case the
+        // backend changes encoding; both are normalized before reaching the UI.
+        let alternate = opencode_go_snapshot_from_json(&json!({
+            "usage": {"rolling": {"percent": "12", "resets_at": 1792835722000i64}}
+        }))
+        .unwrap();
+        assert_eq!(alternate.limits[0].usage_percent, 12.0);
+        assert_eq!(
+            alternate.limits[0].resets_at.as_deref(),
+            Some("2026-10-24T09:55:22+00:00")
+        );
     }
 
     #[test]
