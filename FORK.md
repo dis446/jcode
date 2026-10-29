@@ -34,6 +34,7 @@ pin, the config and the install entry point.
 | ID | Title | Status | Base | Upstream files touched | Patch | Plan | Upstreamable |
 | -- | ----- | ------ | ---- | ---------------------- | ----- | ---- | ------------ |
 | C1 | Native `@file` picker (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [patches/](patches/) (`git format-patch upstream/master..HEAD`) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
+| C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir`, one call at the top of `register_mcp_tools_for_dir`). New: `tool/project.rs`, `docs/PROJECT_TOOLS.md` | [patches/](patches/) | [doc](docs/PROJECT_TOOLS.md) | yes (new module + 2 thin hooks) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
@@ -44,6 +45,15 @@ C1 conflict hints: hooks sit beside `handle_command_suggestion_key` (two key pat
 `input.rs` and remote `key_handling.rs`), `insert_input_text_with_undo` tail, the Backspace arms
 in both paths, `autocomplete()` after `get_suggestions_for`, and the `draw_command_suggestions_overlay`
 call in `ui.rs`. If upstream adds a third key path, the e2e suite fails first.
+
+C2 verify: `cargo test -p jcode-app-core project::` (7 tests: load/merge/validation,
+stdin JSON, non-zero exit, timeout, `cwd: session`, relative command resolution), then a
+session rooted at a repo with `.jcode/tools.json` shows the declared tools in `/context`
+and calls them. `cargo check -p jcode-app-core --profile selfdev` is the fast gate.
+C2 conflict hints: the single hook is the first statement of
+`Registry::register_mcp_tools_for_dir` in `tool/mod.rs`; if upstream splits MCP
+registration per transport, add the project-tools call to each path that receives a
+session `working_dir`. `tool/project.rs` is new and cannot conflict.
 Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
 extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
 `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.
