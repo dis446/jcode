@@ -167,7 +167,7 @@ impl App {
             KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::HYPER,
         );
         let len = state.items.len() as i32;
-        let mut step = |state: &mut AtFileState, d: i32| {
+        let step = |state: &mut AtFileState, d: i32| {
             state.selected = (state.selected as i32 + d).rem_euclid(len) as usize;
         };
         match code {
