@@ -1,0 +1,25 @@
+From 55417676f78e04c58b3a43ace74c7afe17d75524 Mon Sep 17 00:00:00 2001
+From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
+Date: Thu, 29 Oct 2026 12:44:35 +0800
+Subject: [PATCH 8/8] docs(FORK): fix status legend
+
+---
+ FORK.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/FORK.md b/FORK.md
+index 3bb7d3fc5..5a2a8e435 100644
+--- a/FORK.md
++++ b/FORK.md
+@@ -35,7 +35,7 @@ pin, the config and the install entry point.
+ | -- | ----- | ------ | ---- | ---------------------- | ----- | ---- | ------------ |
+ | C1 | Native `@file` picker (pi parity) | merged in `master`, installed | 0.99.1 | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [patches/](patches/) (4, `git format-patch v0.99.1..`) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
+ 
+-Status: planned, in-progress, merged (in `custom/<base>`), dropped, upstreamed
++Status: planned, in-progress, merged (in `master`), dropped, upstreamed
+ (delete from the series on next rebase). Add a row for every new change.
+ 
+ C1 verify: `e2e/run.py --binary <fork bin> --suite all` (13 `at_file` tests), plus
+-- 
+2.56.0
+

@@ -1,7 +1,7 @@
-From 9a7f878707c52db0b5fcf6a62829bb2995f17810 Mon Sep 17 00:00:00 2001
+From 9cd672dfd8ebab85c191267e7d1288c82f1cda2e Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 12:01:41 +0800
-Subject: [PATCH 4/4] fix(at-file): hook remote-mode key path and backspace
+Subject: [PATCH 4/8] fix(at-file): hook remote-mode key path and backspace
  [C1]
 
 ---
@@ -9,10 +9,10 @@ Subject: [PATCH 4/4] fix(at-file): hook remote-mode key path and backspace
  1 file changed, 6 insertions(+)
 
 diff --git a/crates/jcode-tui/src/tui/app/remote/key_handling.rs b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
-index cc13736ef..1b2a097fc 100644
+index c0e89e1f0..565c1ecbc 100644
 --- a/crates/jcode-tui/src/tui/app/remote/key_handling.rs
 +++ b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
-@@ -686,6 +686,11 @@ async fn handle_remote_key_internal(
+@@ -636,6 +636,11 @@ async fn handle_remote_key_internal(
          }
      }
  
@@ -24,7 +24,7 @@ index cc13736ef..1b2a097fc 100644
      if app.handle_command_suggestion_key(code, modifiers) {
          return Ok(());
      }
-@@ -969,6 +974,7 @@ async fn handle_remote_key_internal(
+@@ -919,6 +924,7 @@ async fn handle_remote_key_internal(
                  app.cursor_pos = prev;
                  app.reset_tab_completion();
                  app.sync_model_picker_preview_from_input();

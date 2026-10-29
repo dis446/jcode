@@ -1,0 +1,2489 @@
+From 6252b5c4a85d65ce401b90fadbade204a6bf2216 Mon Sep 17 00:00:00 2001
+From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
+Date: Thu, 29 Oct 2026 12:43:51 +0800
+Subject: [PATCH 6/8] docs: move fork governance, plans, patches and TUI e2e
+ suite here
+
+---
+ FORK.md                                       |  93 +++
+ e2e/README.md                                 |  44 ++
+ e2e/harness.py                                | 157 ++++
+ e2e/run.py                                    |  84 ++
+ e2e/suite_at_file.py                          | 133 ++++
+ e2e/suite_baseline.py                         | 100 +++
+ ...e-completion-crate-prefix-score-walk.patch | 561 ++++++++++++++
+ ...-state-keys-overlay-hooks-C1-phase-3.patch | 727 ++++++++++++++++++
+ ...-at-file-app-level-key-path-tests-C1.patch | 179 +++++
+ ...-remote-mode-key-path-and-backspace-.patch |  37 +
+ plans/at-file-picker.md                       | 274 +++++++
+ 11 files changed, 2389 insertions(+)
+ create mode 100644 FORK.md
+ create mode 100644 e2e/README.md
+ create mode 100644 e2e/harness.py
+ create mode 100755 e2e/run.py
+ create mode 100644 e2e/suite_at_file.py
+ create mode 100644 e2e/suite_baseline.py
+ create mode 100644 patches/0001-feat-at-file-pure-completion-crate-prefix-score-walk.patch
+ create mode 100644 patches/0002-feat-at-file-TUI-state-keys-overlay-hooks-C1-phase-3.patch
+ create mode 100644 patches/0003-test-at-file-app-level-key-path-tests-C1.patch
+ create mode 100644 patches/0004-fix-at-file-hook-remote-mode-key-path-and-backspace-.patch
+ create mode 100644 plans/at-file-picker.md
+
+diff --git a/FORK.md b/FORK.md
+new file mode 100644
+index 000000000..96d558573
+--- /dev/null
++++ b/FORK.md
+@@ -0,0 +1,93 @@
++# jcode fork governance
++
++This is the team-of-one fork of [`1jehuang/jcode`](https://github.com/1jehuang/jcode)
++behind `github.com/dis446/jcode`. We run a **pinned upstream plus our own custom
++work**; upgrading upstream is a deliberate, planned act. Nothing here updates
++jcode automatically.
++
++Everything about the fork lives **in this repo**: the ledger, the plans, the
++exported patches and the TUI regression suite. The dotfiles repo only holds the
++pin, the config and the install entry point.
++
++## Rules
++
++1. **Pin.** `~/dotfiles/jcode/UPSTREAM_VERSION` (dotfiles) is the single source of
++   truth for the base release (no `v`); the branch is `custom/<pin>`, cut from
++   upstream tag `v<pin>`. `~/dotfiles/scripts/jcode-install.sh` clones/updates this
++   repo at that branch and installs the build. Pushing a branch here is what makes
++   a version installable.
++2. **`jcode update` is banned.** Upgrades follow the runbook below. In-app update
++   checks are off (`~/dotfiles/jcode/config.toml`: `check_updates = false`), and
++   `up` in the shell never touches jcode.
++3. **Every custom change is tracked** in the ledger below *before* it is merged,
++   with its patch exported to `patches/`. No untracked local divergence.
++4. **Remotes:** `origin` = this fork, `upstream` = `1jehuang/jcode`.
++   Branch `custom/<base>` is upstream tag `v<base>` plus our commits, kept as a
++   small, rebased series.
++5. **Keep patches small and isolated.** Prefer new files/modules and thin hooks
++   into upstream code over editing existing functions. Smaller touch surface =
++   fewer conflicts. Note the upstream files each change touches.
++6. **Config/prompt/skills stay in dotfiles**, not here, wherever possible.
++
++## Ledger of custom work
++
++| ID | Title | Status | Base | Upstream files touched | Patch | Plan | Upstreamable |
++| -- | ----- | ------ | ---- | ---------------------- | ----- | ---- | ------------ |
++| C1 | Native `@file` picker (pi parity) | merged in `custom/0.99.1`, installed | 0.99.1 | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [patches/](patches/) (4, `git format-patch v0.99.1..`) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
++
++Status: planned, in-progress, merged (in `custom/<base>`), dropped, upstreamed
++(delete from the series on next rebase). Add a row for every new change.
++
++C1 verify: `e2e/run.py --binary <fork bin> --suite all` (13 `at_file` tests), plus
++`cargo test -p jcode-at-file` (17) and `cargo test -p jcode-tui --lib at_file` (14).
++C1 conflict hints: hooks sit beside `handle_command_suggestion_key` (two key paths: local
++`input.rs` and remote `key_handling.rs`), `insert_input_text_with_undo` tail, the Backspace arms
++in both paths, `autocomplete()` after `get_suggestions_for`, and the `draw_command_suggestions_overlay`
++call in `ui.rs`. If upstream adds a third key path, the e2e suite fails first.
++Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
++extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
++`~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.
++
++## Per-change entry (copy into the ledger and the patch header)
++
++- What and why, in two lines.
++- Upstream files/functions touched, and any upstream behaviour we rely on.
++- How to verify it still works (command or manual check).
++- Conflict hints: what to look for when upstream changes those files.
++
++## Test gates
++
++| Gate | Command | Time | Use |
++| ---- | ------- | ---- | --- |
++| TUI e2e (binary-only) | `e2e/run.py --binary <bin> --suite all` | seconds | Every change and every upgrade. Works on stock and fork. |
++| Targeted unit | `cargo test -p jcode-at-file`, `cargo test -p jcode-tui --lib at_file` | under 1 min | Fork code. |
++| Upstream mock e2e | `cargo test --test e2e` | 1-2 min after build | After upgrades. |
++| Full `jcode-tui` lib suite | not a gate | 25+ min, hangs | Known: `tui::ui::tests::*` stall under parallel load, 6 other tests fail on this host. Run `baseline` against stock to tell upstream failures from ours. |
++
++See `e2e/README.md`.
++
++## Upgrade runbook
++
++1. Read the upstream release notes/diff between `v<pinned>` and `v<new>`
++   (`git log --stat v<pinned>..v<new>`, focusing on files in the ledger).
++2. `git fetch upstream --tags`; `git checkout -b custom/<new> custom/<pinned>`;
++   `git rebase --onto v<new> v<pinned>`. Resolve conflicts per ledger hints.
++   Drop any change upstream now ships (mark `upstreamed`).
++3. Run `e2e/run.py --suite baseline` on the new stock binary, then build the fork
++   and run `--suite all`. Run `cargo test --test e2e`.
++4. Re-export `patches/*.patch` (`git format-patch v<new>..HEAD`), update the
++   ledger Base column.
++5. Push `custom/<new>`, then bump `~/dotfiles/jcode/UPSTREAM_VERSION` to `<new>`
++   and run `~/dotfiles/scripts/jcode-install.sh` on each machine.
++6. Rollback: `~/dotfiles/scripts/jcode-install.sh --rollback-to <version>`; every
++   installed build stays under `~/.jcode/builds/versions/`.
++
++## Status
++
++- Fork: `github.com/dis446/jcode`, branch `custom/0.99.1` (4 commits on `v0.99.1`).
++  Checkout `~/Code/Personal/jcode`, `origin` = fork, `upstream` = `1jehuang/jcode`.
++- Install is owned by dotfiles: `~/dotfiles/scripts/jcode-install.sh` clones/updates
++  this repo at `custom/<pin>`, builds with cargo, and installs
++  `~/.jcode/builds/versions/<ver>/` (plus the `stable` and `shared-server` symlinks).
++  `--rollback-to <version>` switches to any installed build.
++- Config, prompt overlay, skills and `mcp.json` live in dotfiles under `jcode/`.
+diff --git a/e2e/README.md b/e2e/README.md
+new file mode 100644
+index 000000000..4532444e8
+--- /dev/null
++++ b/e2e/README.md
+@@ -0,0 +1,44 @@
++# jcode TUI e2e regression suite
++
++Deterministic, fast, binary-only. It drives a real `jcode` binary in a private tmux
++server and asserts on the rendered screen. It needs no source tree and no cargo,
++so the **same suite runs against stock upstream and against our fork build**.
++
++```bash
++e2e/run.py --binary "$(command -v jcode)" --suite baseline       # stock: must be green
++e2e/run.py --binary ~/Code/Personal/jcode/target/selfdev/jcode --suite all
++e2e/run.py --binary ... --suite baseline --repeat 8 -j 12         # flake hunt
++```
++
++| Suite | Runs on | Meaning |
++| ----- | ------- | ------- |
++| `baseline` | stock **and** fork | Behavior the fork must never change (composer, slash palette, paste, resize, undo). |
++| `at_file` | fork only (C1) | The `@file` picker. Fails on stock by design: proves the tests detect the feature. |
++
++## Why it is deterministic
++
++- Each test gets its own `HOME`, `JCODE_HOME`, `JCODE_RUNTIME_DIR`, `XDG_RUNTIME_DIR`,
++  tmux server socket and work tree. Scrubbed env (`env -i`), telemetry and updates off.
++  Tests therefore run in parallel safely and never touch `~/.jcode` or your daemon.
++- No network, no provider: only the composer is exercised, nothing is sent.
++- No fixed sleeps. Every step polls the screen for a predicate with a hard timeout and
++  prints the last screen on failure.
++- Teardown kills the tmux server and any jcode server that inherited the sandbox
++  runtime dir, then removes the sandbox.
++- Verified: 80/80 on `--repeat 8 -j 12` against stock 0.99.1 (6.7 s), no leaked processes.
++
++## Rules
++
++1. Every custom change (ledger row in ../FORK.md) ships with tests in a suite here.
++2. A fork change that breaks `baseline` is a regression, full stop.
++3. On every upstream upgrade: run `baseline` on the **new stock** binary first (catches
++   upstream UI changes that invalidate our assertions), then on the rebased fork.
++4. When a test breaks because upstream changed legitimately, fix the assertion in the same
++   commit as the upgrade and say so in the ledger.
++
++## Not covered (and why)
++
++Model/tool turns, streaming, swarm, reload handoff. Those need a provider. Upstream's
++`tests/e2e` (mock provider, run with `cargo test --test e2e`) covers them from source and
++should be run after each upgrade in the fork checkout. The slow Rust `jcode-tui` lib suite
++is not a gate: see `../FORK.md` "Test gates".
+diff --git a/e2e/harness.py b/e2e/harness.py
+new file mode 100644
+index 000000000..3ba763533
+--- /dev/null
++++ b/e2e/harness.py
+@@ -0,0 +1,157 @@
++"""Deterministic TUI harness for jcode, driven through tmux.
++
++Works against ANY jcode binary (stock upstream or our fork build): it only uses
++the public CLI and the rendered screen. No cargo, no source tree.
++
++Determinism rules:
++  * Fully isolated: temp JCODE_HOME, JCODE_RUNTIME_DIR, HOME, XDG_RUNTIME_DIR,
++    private tmux server socket, scrubbed environment, telemetry and update off.
++  * No network and no provider needed: the composer is exercised before any
++    request is sent.
++  * No fixed sleeps. Every step polls the screen until a predicate holds or a
++    hard timeout fails the test with the last screen attached.
++"""
++from __future__ import annotations
++
++import os
++import shutil
++import subprocess
++import tempfile
++import time
++import uuid
++
++DEFAULT_TIMEOUT = 15.0
++
++
++class Timeout(AssertionError):
++    pass
++
++
++class Session:
++    def __init__(self, binary: str, files: list[str] | None = None,
++                 cols: int = 120, rows: int = 32, args: list[str] | None = None):
++        self.binary = binary
++        self.root = tempfile.mkdtemp(prefix="jcode-e2e-")
++        self.work = os.path.join(self.root, "work")
++        self.home = os.path.join(self.root, "home")
++        self.run = os.path.join(self.root, "run")
++        for d in (self.work, self.home, self.run):
++            os.makedirs(d)
++        os.chmod(self.run, 0o700)
++        for f in files or []:
++            path = os.path.join(self.work, f)
++            os.makedirs(os.path.dirname(path), exist_ok=True)
++            if f.endswith("/"):
++                continue
++            open(path, "w").close()
++        self.tmux_sock = os.path.join(self.root, "tmux.sock")
++        self.name = "e2e" + uuid.uuid4().hex[:8]
++        env = {
++            "HOME": self.home,
++            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
++            "TERM": "xterm-256color",
++            "LANG": "C.UTF-8",
++            "JCODE_HOME": os.path.join(self.home, ".jcode"),
++            "JCODE_RUNTIME_DIR": self.run,
++            "XDG_RUNTIME_DIR": self.run,
++            "JCODE_NO_TELEMETRY": "1",
++        }
++        envargs = " ".join(f"{k}={shlex_quote(v)}" for k, v in env.items())
++        cmd = f"env -i {envargs} {shlex_quote(binary)} --no-update --no-selfdev " + " ".join(args or [])
++        self._tmux("new-session", "-d", "-s", self.name, "-x", str(cols), "-y", str(rows),
++                   "-c", self.work, cmd)
++
++    # -- plumbing ---------------------------------------------------------
++    def _tmux(self, *a: str) -> str:
++        r = subprocess.run(["tmux", "-S", self.tmux_sock, *a], capture_output=True, text=True)
++        if r.returncode != 0:
++            raise RuntimeError(f"tmux {a}: {r.stderr.strip()}")
++        return r.stdout
++
++    def screen(self) -> str:
++        try:
++            out = self._tmux("capture-pane", "-p", "-t", self.name)
++        except RuntimeError:
++            return ""
++        return "\n".join(line.rstrip() for line in out.splitlines())
++
++    def alive(self) -> bool:
++        r = subprocess.run(["tmux", "-S", self.tmux_sock, "has-session", "-t", self.name],
++                           capture_output=True)
++        return r.returncode == 0
++
++    # -- input ------------------------------------------------------------
++    def type(self, text: str) -> None:
++        self._tmux("send-keys", "-t", self.name, "-l", text)
++
++    def key(self, *keys: str) -> None:
++        self._tmux("send-keys", "-t", self.name, *keys)
++
++    def paste(self, text: str) -> None:
++        buf = "b" + uuid.uuid4().hex[:6]
++        self._tmux("set-buffer", "-b", buf, text)
++        self._tmux("paste-buffer", "-p", "-b", buf, "-t", self.name)
++
++    # -- waiting ----------------------------------------------------------
++    def wait_for(self, pred, what: str, timeout: float = DEFAULT_TIMEOUT) -> str:
++        deadline = time.monotonic() + timeout
++        last = ""
++        while time.monotonic() < deadline:
++            last = self.screen()
++            if pred(last):
++                return last
++            time.sleep(0.05)
++        raise Timeout(f"timed out waiting for: {what}\n--- last screen ---\n{last}\n---")
++
++    def wait_text(self, needle: str, timeout: float = DEFAULT_TIMEOUT) -> str:
++        return self.wait_for(lambda s: needle in s, f"text {needle!r}", timeout)
++
++    def wait_gone(self, needle: str, timeout: float = DEFAULT_TIMEOUT) -> str:
++        return self.wait_for(lambda s: needle not in s, f"{needle!r} to disappear", timeout)
++
++    def settle(self, quiet: float = 0.4, timeout: float = DEFAULT_TIMEOUT) -> str:
++        """Return once the screen stops changing for `quiet` seconds."""
++        deadline = time.monotonic() + timeout
++        prev, since = None, time.monotonic()
++        while time.monotonic() < deadline:
++            cur = self.screen()
++            if cur != prev:
++                prev, since = cur, time.monotonic()
++            elif time.monotonic() - since >= quiet:
++                return cur
++            time.sleep(0.05)
++        raise Timeout("screen never settled\n" + (prev or ""))
++
++    def wait_ready(self) -> str:
++        """First stable frame with a composer on screen."""
++        self.wait_for(lambda s: s.strip() != "", "any output", 30)
++        return self.settle(quiet=0.6, timeout=30)
++
++    def _kill_leftovers(self) -> None:
++        """Kill any process (e.g. the auto-spawned jcode server) that inherited our runtime dir."""
++        marker = f"JCODE_RUNTIME_DIR={self.run}".encode()
++        for pid in os.listdir("/proc"):
++            if not pid.isdigit() or int(pid) == os.getpid():
++                continue
++            try:
++                with open(f"/proc/{pid}/environ", "rb") as fh:
++                    if marker in fh.read().split(b"\0"):
++                        os.kill(int(pid), 9)
++            except (OSError, ProcessLookupError):
++                pass
++
++    def close(self) -> None:
++        subprocess.run(["tmux", "-S", self.tmux_sock, "kill-server"], capture_output=True)
++        self._kill_leftovers()
++        shutil.rmtree(self.root, ignore_errors=True)
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *exc):
++        self.close()
++
++
++def shlex_quote(s: str) -> str:
++    import shlex
++    return shlex.quote(s)
+diff --git a/e2e/run.py b/e2e/run.py
+new file mode 100755
+index 000000000..fb1da01f0
+--- /dev/null
++++ b/e2e/run.py
+@@ -0,0 +1,84 @@
++#!/usr/bin/env python3
++"""Run the jcode TUI e2e suites against any binary, in parallel, deterministically.
++
++  run.py --binary $(which jcode) --suite baseline
++  run.py --binary ~/Code/Personal/jcode/target/selfdev/jcode --suite all
++
++Each test owns a fully isolated sandbox (see harness.py), so tests run in
++parallel safely. Exit 0 only if every selected test passes. Artifacts (the last
++screen of every failure) go to --artifacts.
++"""
++import argparse
++import concurrent.futures as cf
++import importlib
++import os
++import subprocess
++import sys
++import time
++import traceback
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++
++SUITES = {"baseline": "suite_baseline", "at_file": "suite_at_file"}
++
++
++def version_of(binary):
++    out = subprocess.run([binary, "--version"], capture_output=True, text=True).stdout
++    # "jcode v0.99.1 (7206efd0c)"
++    for tok in out.split():
++        if tok.startswith("v") and tok[1:2].isdigit():
++            return tok[1:]
++    return None
++
++
++def run_one(binary, version, modname, name, timeout):
++    mod = importlib.import_module(modname)
++    fn = getattr(mod, name)
++    start = time.monotonic()
++    try:
++        fn(binary, version)
++        return modname, name, True, time.monotonic() - start, ""
++    except BaseException:
++        return modname, name, False, time.monotonic() - start, traceback.format_exc()
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--binary", required=True)
++    ap.add_argument("--suite", default="baseline", choices=[*SUITES, "all"])
++    ap.add_argument("-k", default="", help="substring filter on test name")
++    ap.add_argument("-j", type=int, default=6)
++    ap.add_argument("--repeat", type=int, default=1, help="run N times, fail on any flake")
++    ap.add_argument("--artifacts", default=os.path.expanduser("~/tmp/jcode-e2e-artifacts"))
++    a = ap.parse_args()
++
++    binary = os.path.realpath(os.path.expanduser(a.binary))
++    version = version_of(binary)
++    print(f"binary: {binary}\nversion: {version}")
++    names = list(SUITES.values()) if a.suite == "all" else [SUITES[a.suite]]
++    jobs = []
++    for modname in names:
++        mod = importlib.import_module(modname)
++        for n in sorted(dir(mod)):
++            if n.startswith("t_") and a.k in n:
++                jobs += [(modname, n)] * a.repeat
++
++    os.makedirs(a.artifacts, exist_ok=True)
++    t0 = time.monotonic()
++    failed = []
++    with cf.ThreadPoolExecutor(max_workers=a.j) as ex:
++        futs = [ex.submit(run_one, binary, version, m, n, 60) for m, n in jobs]
++        for f in cf.as_completed(futs):
++            m, n, ok, dt, tb = f.result()
++            print(f"{'PASS' if ok else 'FAIL'}  {m}.{n}  {dt:4.1f}s")
++            if not ok:
++                failed.append((m, n))
++                with open(os.path.join(a.artifacts, f"{m}.{n}.txt"), "a") as fh:
++                    fh.write(tb + "\n")
++                print("   " + tb.strip().splitlines()[-1][:200])
++    print(f"\n{len(jobs) - len(failed)}/{len(jobs)} passed in {time.monotonic() - t0:.1f}s")
++    sys.exit(1 if failed else 0)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/e2e/suite_at_file.py b/e2e/suite_at_file.py
+new file mode 100644
+index 000000000..fc33e1e19
+--- /dev/null
++++ b/e2e/suite_at_file.py
+@@ -0,0 +1,133 @@
++"""`@file` picker suite (fork ledger C1). Meant for the fork build only.
++
++The stock binary has no popup, so this suite is expected to FAIL there: that
++failure is the proof the tests detect the feature.
++"""
++from harness import Session
++
++SUITE = "at_file"
++FILES = ["README.md", "src/main.rs", "src/lib.rs", "my dir/note.txt", ".env", "docs/readme.txt"]
++
++
++def composer(screen):
++    return screen.split("1>")[-1]
++
++
++def t_at_opens_popup_best_match_first(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type("@readm")
++        screen = s.wait_text("▸ README.md")
++        assert screen.index("▸ README.md") < screen.index("readme.txt") if "readme.txt" in screen else True
++
++
++def t_scoped_dir_lists_children(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type("@src/")
++        screen = s.wait_text("src/main.rs")
++        assert "src/lib.rs" in screen
++
++
++def t_enter_accepts_file_adds_space_no_submit(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type("see @readm")
++        s.wait_text("▸ README.md")
++        s.key("Enter")
++        s.wait_text("1> see @README.md")
++        screen = s.settle()
++        assert "▸" not in screen, "popup should close after accept\n" + screen
++        assert "2>" not in screen, "Enter must not submit\n" + screen
++
++
++def t_tab_on_dir_keeps_drilling(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type("@sr")
++        s.wait_text("▸ src/")
++        s.key("Tab")
++        s.wait_text("1> @src/")
++        s.wait_text("src/main.rs")
++
++
++def t_esc_closes_popup_keeps_input(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type("@rea")
++        s.wait_text("▸")
++        s.key("Escape")
++        s.wait_gone("▸")
++        assert "1> @rea" in s.settle()
++
++
++def t_down_moves_selection(b, v):
++    with Session(b, files=["a1.rs", "a2.rs"]) as s:
++        s.wait_ready()
++        s.type("@a")
++        s.wait_text("▸ a1.rs")
++        s.key("Down")
++        s.wait_text("▸ a2.rs")
++
++
++def t_quoted_flow_with_spaces(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type('@"my')
++        s.wait_text("my dir/")
++        s.key("Tab")
++        s.wait_text('1> @"my dir/')
++
++
++def t_wrapper_prefix_opens_popup(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type("(@readm")
++        s.wait_text("▸ README.md")
++
++
++def t_hidden_files_included(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type("@.en")
++        s.wait_text("▸ .env")
++
++
++def t_tab_forces_completion_on_plain_token(b, v):
++    with Session(b, files=["only_one_file.txt"]) as s:
++        s.wait_ready()
++        s.type("cat only_one")
++        s.key("Tab")
++        s.wait_text("1> cat only_one_file.txt")
++
++
++def t_slash_unaffected_while_files_match(b, v):
++    with Session(b, files=["model.rs"]) as s:
++        s.wait_ready()
++        s.type("/mod")
++        screen = s.wait_text("/model  List or switch models")
++        assert "▸" not in screen
++
++
++def t_popup_never_wraps_on_narrow_terminal(b, v):
++    with Session(b, files=["a_really_long_file_name_that_overflows_everything.rs"], cols=40, rows=24) as s:
++        s.wait_ready()
++        s.type("@a_really")
++        screen = s.wait_text("▸")
++        for line in screen.splitlines():
++            assert len(line) <= 40, f"line wider than terminal: {line!r}"
++
++
++def t_backspace_updates_then_closes_popup(b, v):
++    with Session(b, files=FILES) as s:
++        s.wait_ready()
++        s.type("@readm")
++        s.wait_text("▸ README.md")
++        s.key("BSpace")
++        s.wait_text("1> @read")
++        s.wait_text("▸ README.md")
++        for _ in range(5):
++            s.key("BSpace")
++        # Empty composer on a fresh session shows stock onboarding (no `1>`), so only
++        # assert the popup is gone.
++        s.wait_gone("▸ README.md")
+diff --git a/e2e/suite_baseline.py b/e2e/suite_baseline.py
+new file mode 100644
+index 000000000..10af71752
+--- /dev/null
++++ b/e2e/suite_baseline.py
+@@ -0,0 +1,100 @@
++"""Baseline regression suite. Must pass on stock upstream AND on the fork.
++
++Pins behavior the fork must never change.
++"""
++from harness import Session
++
++SUITE = "baseline"
++
++
++def t_starts_and_shows_composer(b, expect_version):
++    with Session(b) as s:
++        screen = s.wait_ready()
++        assert "1>" in screen, screen
++        if expect_version:
++            assert f"v{expect_version}" in screen, f"version {expect_version} not on screen\n{screen}"
++        assert s.alive()
++
++
++def t_typing_echoes_and_ctrl_u_clears(b, v):
++    with Session(b) as s:
++        s.wait_ready()
++        s.type("hello world")
++        s.wait_text("1> hello world")
++        s.key("C-u")
++        s.wait_gone("hello world")
++
++
++def t_slash_palette_lists_model(b, v):
++    with Session(b) as s:
++        s.wait_ready()
++        s.type("/mod")
++        screen = s.wait_text("/model  List or switch models")
++        assert "/models" in screen
++
++
++def t_slash_tab_completes_command(b, v):
++    with Session(b) as s:
++        s.wait_ready()
++        s.type("/hel")
++        s.wait_text("/help")
++        s.key("Tab")
++        s.wait_for(lambda sc: "1> /help" in sc, "tab completes /hel to /help")
++
++
++def t_slash_palette_closes_on_clear(b, v):
++    with Session(b) as s:
++        s.wait_ready()
++        s.type("/mod")
++        s.wait_text("List or switch models")
++        s.key("C-u")
++        s.wait_gone("List or switch models")
++
++
++def t_ctrl_z_restores_cleared_input(b, v):
++    with Session(b) as s:
++        s.wait_ready()
++        s.type("keep me")
++        s.wait_text("keep me")
++        s.key("C-u")
++        s.wait_gone("keep me")
++        s.key("C-z")
++        s.wait_text("1> keep me")
++
++
++def t_email_like_at_sign_is_plain_text(b, v):
++    """`x@y` is not a mention token: no popup, text stays literal."""
++    with Session(b, files=["README.md"]) as s:
++        s.wait_ready()
++        s.type("mail me at x@rea")
++        screen = s.wait_text("1> mail me at x@rea")
++        assert "README.md" not in screen.split("1>")[-1], screen
++
++
++def t_bracketed_paste_with_at_is_literal(b, v):
++    with Session(b, files=["README.md"]) as s:
++        s.wait_ready()
++        s.paste("@readm")
++        screen = s.wait_text("@readm")
++        assert "README.md" not in screen.split("1>")[-1], screen
++
++
++def t_long_input_does_not_crash(b, v):
++    with Session(b) as s:
++        s.wait_ready()
++        s.type("x" * 600)
++        s.settle()
++        assert s.alive()
++        s.key("C-u")
++        s.wait_gone("xxxxxxxxxx")
++
++
++def t_resize_survives(b, v):
++    with Session(b) as s:
++        s.wait_ready()
++        s.type("still here")
++        s._tmux("resize-window", "-t", s.name, "-x", "60", "-y", "18")
++        s.wait_text("still here")
++        s._tmux("resize-window", "-t", s.name, "-x", "140", "-y", "40")
++        s.wait_text("still here")
++        assert s.alive()
+diff --git a/patches/0001-feat-at-file-pure-completion-crate-prefix-score-walk.patch b/patches/0001-feat-at-file-pure-completion-crate-prefix-score-walk.patch
+new file mode 100644
+index 000000000..0c9efa628
+--- /dev/null
++++ b/patches/0001-feat-at-file-pure-completion-crate-prefix-score-walk.patch
+@@ -0,0 +1,561 @@
++From 447f83c770225fefa27c827424db284b9d92f95b Mon Sep 17 00:00:00 2001
++From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
++Date: Thu, 29 Oct 2026 11:19:39 +0800
++Subject: [PATCH 1/4] feat(at-file): pure completion crate (prefix, score,
++ walker) [C1 phase 1-2]
++
++---
++ Cargo.lock                        |   8 +
++ Cargo.toml                        |   1 +
++ crates/jcode-at-file/Cargo.toml   |  19 +++
++ crates/jcode-at-file/src/lib.rs   | 268 ++++++++++++++++++++++++++++++
++ crates/jcode-at-file/src/tests.rs | 205 +++++++++++++++++++++++
++ 5 files changed, 501 insertions(+)
++ create mode 100644 crates/jcode-at-file/Cargo.toml
++ create mode 100644 crates/jcode-at-file/src/lib.rs
++ create mode 100644 crates/jcode-at-file/src/tests.rs
++
++diff --git a/Cargo.lock b/Cargo.lock
++index fade49a34..5882e6b45 100644
++--- a/Cargo.lock
+++++ b/Cargo.lock
++@@ -3453,6 +3453,14 @@ dependencies = [
++  "serde_json",
++ ]
++ 
+++[[package]]
+++name = "jcode-at-file"
+++version = "0.1.0"
+++dependencies = [
+++ "ignore",
+++ "tempfile",
+++]
+++
++ [[package]]
++ name = "jcode-auth-types"
++ version = "0.1.0"
++diff --git a/Cargo.toml b/Cargo.toml
++index 43b66fcb6..1e3f13a18 100644
++--- a/Cargo.toml
+++++ b/Cargo.toml
++@@ -27,6 +27,7 @@ members = [
++     "crates/jcode-config-types",
++     "crates/jcode-command-risk",
++     "crates/jcode-core",
+++    "crates/jcode-at-file",
++     "crates/jcode-fuzzy",
++     "crates/jcode-harness-api",
++     "crates/jcode-harness-api-server",
++diff --git a/crates/jcode-at-file/Cargo.toml b/crates/jcode-at-file/Cargo.toml
++new file mode 100644
++index 000000000..8b9570504
++--- /dev/null
+++++ b/crates/jcode-at-file/Cargo.toml
++@@ -0,0 +1,19 @@
+++[package]
+++name = "jcode-at-file"
+++version = "0.1.0"
+++edition = "2024"
+++publish = false
+++
+++# CUSTOM (dis446 fork, ledger C1): `@file` composer completion. Pure logic plus
+++# a gitignore-aware candidate walker. Kept out of jcode-tui so upstream rebases
+++# only ever touch a handful of small hooks.
+++
+++[lib]
+++name = "jcode_at_file"
+++path = "src/lib.rs"
+++
+++[dependencies]
+++ignore = "0.4"
+++
+++[dev-dependencies]
+++tempfile = "3"
++diff --git a/crates/jcode-at-file/src/lib.rs b/crates/jcode-at-file/src/lib.rs
++new file mode 100644
++index 000000000..c6c0f489c
++--- /dev/null
+++++ b/crates/jcode-at-file/src/lib.rs
++@@ -0,0 +1,268 @@
+++//! `@file` completion for the composer (pi parity).
+++//!
+++//! Spec source: `@earendil-works/pi-tui` `autocomplete.js`. Three pure pieces:
+++//!
+++//! * [`extract_at_prefix`]: find the `@token` ending at the cursor.
+++//! * [`search`]: gitignore-aware candidate walk, scored and sorted like pi.
+++//! * [`apply_completion`]: build the replacement text and cursor.
+++
+++use std::path::{Path, PathBuf};
+++use std::sync::atomic::{AtomicBool, Ordering};
+++
+++/// Max rows kept after ranking.
+++pub const MAX_RESULTS: usize = 20;
+++/// Max raw matches per walk pass (mirrors `fd --max-results 100`).
+++const PASS_LIMIT: usize = 100;
+++
+++/// One completion candidate.
+++#[derive(Debug, Clone, PartialEq, Eq)]
+++pub struct Candidate {
+++    /// Display path as typed after `@` (scoped prefix + relative path). Dirs end with `/`.
+++    pub path: String,
+++    /// File or directory name (no trailing slash).
+++    pub name: String,
+++    pub is_dir: bool,
+++}
+++
+++/// The `@token` before the cursor.
+++#[derive(Debug, Clone, PartialEq, Eq)]
+++pub struct AtPrefix {
+++    /// Byte offset of the `@` in the text.
+++    pub start: usize,
+++    /// Everything after `@` up to the cursor (without the opening quote).
+++    pub query: String,
+++    /// Prefix used the `@"..."` form.
+++    pub quoted: bool,
+++}
+++
+++fn is_wrapper(c: char) -> bool {
+++    matches!(c, '(' | '[' | '{' | '<' | '`')
+++}
+++
+++fn is_cjk_punct(c: char) -> bool {
+++    matches!(c, '\u{3000}'..='\u{303F}' | '\u{FF00}'..='\u{FF0F}' | '\u{FF1A}'..='\u{FF20}')
+++}
+++
+++fn is_boundary(c: char) -> bool {
+++    c.is_whitespace() || is_cjk_punct(c)
+++}
+++
+++/// Find the `@token` ending at `cursor` (byte offset). `None` when the cursor
+++/// is not inside one (for example `email@host`).
+++pub fn extract_at_prefix(text: &str, cursor: usize) -> Option<AtPrefix> {
+++    let cursor = cursor.min(text.len());
+++    if !text.is_char_boundary(cursor) {
+++        return None;
+++    }
+++    let before = &text[..cursor];
+++
+++    // Quoted form: last `@"` at a token start with no closing quote after it.
+++    if let Some(pos) = before.rfind("@\"") {
+++        let after_open = &before[pos + 2..];
+++        if !after_open.contains('"') && starts_token(before, pos) {
+++            return Some(AtPrefix {
+++                start: pos,
+++                query: after_open.to_string(),
+++                quoted: true,
+++            });
+++        }
+++    }
+++
+++    // Plain form: the token after the last boundary char, wrappers stripped.
+++    let token_start = before
+++        .char_indices()
+++        .rev()
+++        .find(|(_, c)| is_boundary(*c))
+++        .map(|(i, c)| i + c.len_utf8())
+++        .unwrap_or(0);
+++    let token = &before[token_start..];
+++    let unwrapped = token.trim_start_matches(is_wrapper);
+++    let rest = unwrapped.strip_prefix('@')?;
+++    if rest.starts_with('"') {
+++        return None;
+++    }
+++    Some(AtPrefix {
+++        start: cursor - rest.len() - 1,
+++        query: rest.to_string(),
+++        quoted: false,
+++    })
+++}
+++
+++/// Is byte `pos` at a token start: start of text, after a boundary, or after wrappers.
+++fn starts_token(text: &str, pos: usize) -> bool {
+++    let head = text[..pos].trim_end_matches(is_wrapper);
+++    head.is_empty() || head.chars().next_back().is_some_and(is_boundary)
+++}
+++
+++/// Score an entry like pi `scoreEntry`. `None` drops the entry.
+++pub fn score_entry(c: &Candidate, query: &str) -> Option<u32> {
+++    if query.is_empty() {
+++        return Some(1);
+++    }
+++    let q = query.to_lowercase();
+++    let name = c.name.to_lowercase();
+++    let path = c.path.to_lowercase();
+++    let mut score = if name == q {
+++        100
+++    } else if name.starts_with(&q) {
+++        80
+++    } else if name.contains(&q) {
+++        50
+++    } else if path.contains(&q) {
+++        30
+++    } else {
+++        return None;
+++    };
+++    if c.is_dir && score > 0 {
+++        score += 10;
+++    }
+++    Some(score)
+++}
+++
+++fn depth(c: &Candidate) -> usize {
+++    c.path.trim_end_matches('/').matches('/').count()
+++}
+++
+++/// Rank, sort and truncate: score desc, depth asc, length asc, alphabetical.
+++pub fn rank(mut items: Vec<Candidate>, name_query: &str) -> Vec<Candidate> {
+++    let mut scored: Vec<(u32, Candidate)> = items
+++        .drain(..)
+++        .filter_map(|c| score_entry(&c, name_query).map(|s| (s, c)))
+++        .collect();
+++    scored.sort_by(|(sa, a), (sb, b)| {
+++        sb.cmp(sa)
+++            .then_with(|| depth(a).cmp(&depth(b)))
+++            .then_with(|| a.path.len().cmp(&b.path.len()))
+++            .then_with(|| a.path.cmp(&b.path))
+++    });
+++    scored.truncate(MAX_RESULTS);
+++    scored.into_iter().map(|(_, c)| c).collect()
+++}
+++
+++/// Split the typed query into (scope prefix incl. trailing `/`, name query).
+++fn split_scope(query: &str) -> (&str, &str) {
+++    match query.rfind('/') {
+++        Some(i) => (&query[..=i], &query[i + 1..]),
+++        None => ("", query),
+++    }
+++}
+++
+++fn resolve_base(cwd: &Path, scope: &str) -> Option<PathBuf> {
+++    if scope.is_empty() {
+++        return Some(cwd.to_path_buf());
+++    }
+++    let expanded = if let Some(rest) = scope.strip_prefix("~/") {
+++        PathBuf::from(std::env::var_os("HOME")?).join(rest)
+++    } else if scope == "~" {
+++        PathBuf::from(std::env::var_os("HOME")?)
+++    } else if Path::new(scope).is_absolute() {
+++        PathBuf::from(scope)
+++    } else {
+++        cwd.join(scope)
+++    };
+++    expanded.is_dir().then_some(expanded)
+++}
+++
+++fn walk(
+++    base: &Path,
+++    scope_prefix: &str,
+++    needle: &str,
+++    full_path: bool,
+++    max_depth: Option<usize>,
+++    cancel: &AtomicBool,
+++) -> Vec<Candidate> {
+++    let mut out = Vec::new();
+++    let mut builder = ignore::WalkBuilder::new(base);
+++    builder.hidden(false).follow_links(true).max_depth(max_depth);
+++    builder.filter_entry(|e| e.file_name() != ".git");
+++    let needle = needle.to_lowercase();
+++    for entry in builder.build().flatten() {
+++        if cancel.load(Ordering::Relaxed) {
+++            return out;
+++        }
+++        if entry.depth() == 0 {
+++            continue;
+++        }
+++        let Ok(rel) = entry.path().strip_prefix(base) else {
+++            continue;
+++        };
+++        let rel = rel.to_string_lossy().replace('\\', "/");
+++        let name = entry.file_name().to_string_lossy().to_string();
+++        let haystack = if full_path { &rel } else { &name };
+++        if !needle.is_empty() && !haystack.to_lowercase().contains(&needle) {
+++            continue;
+++        }
+++        let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+++        out.push(Candidate {
+++            path: format!("{scope_prefix}{rel}{}", if is_dir { "/" } else { "" }),
+++            name,
+++            is_dir,
+++        });
+++        if out.len() >= PASS_LIMIT {
+++            break;
+++        }
+++    }
+++    out
+++}
+++
+++/// Candidates for the typed `query` (text after `@`, no quote), relative to `cwd`.
+++/// Returns early with a partial result when `cancel` is set.
+++pub fn search(cwd: &Path, query: &str, cancel: &AtomicBool) -> Vec<Candidate> {
+++    let (scope, name_query) = split_scope(query);
+++    let (base, scope_prefix, full_path, needle) = match resolve_base(cwd, scope) {
+++        Some(base) => (base, scope, false, name_query),
+++        // Unresolvable scope: match the whole typed path against relative paths.
+++        None => (cwd.to_path_buf(), "", true, query),
+++    };
+++    let needle = needle.trim_end_matches('/');
+++    // Pass 1: depth-1 entries first. Pass 2: recursive. Merge, de-duplicate.
+++    let mut merged = walk(&base, scope_prefix, needle, full_path, Some(1), cancel);
+++    if !cancel.load(Ordering::Relaxed) {
+++        let deep = walk(&base, scope_prefix, needle, full_path, None, cancel);
+++        for c in deep {
+++            if !merged.iter().any(|m| m.path == c.path) {
+++                merged.push(c);
+++            }
+++        }
+++    }
+++    rank(merged, if full_path { needle } else { name_query })
+++}
+++
+++/// Apply `candidate` to `text`, replacing the prefix through the cursor.
+++/// Returns `(new_text, new_cursor)`.
+++pub fn apply_completion(
+++    text: &str,
+++    cursor: usize,
+++    prefix: &AtPrefix,
+++    candidate: &Candidate,
+++) -> (String, usize) {
+++    let cursor = cursor.min(text.len());
+++    let needs_quotes = prefix.quoted || candidate.path.contains(' ');
+++    let mut value = if needs_quotes {
+++        format!("@\"{}\"", candidate.path)
+++    } else {
+++        format!("@{}", candidate.path)
+++    };
+++    let mut after = &text[cursor..];
+++    // Typing inside an existing `@"..."` pair: reuse its closing quote.
+++    if prefix.quoted && after.starts_with('"') {
+++        after = &after[1..];
+++    }
+++    let mut new_cursor = prefix.start + value.len();
+++    if candidate.is_dir {
+++        if needs_quotes {
+++            new_cursor -= 1; // land before the closing quote, keep drilling
+++        }
+++    } else {
+++        value.push(' ');
+++        new_cursor = prefix.start + value.len();
+++    }
+++    let mut out = String::with_capacity(text.len() + value.len());
+++    out.push_str(&text[..prefix.start]);
+++    out.push_str(&value);
+++    out.push_str(after);
+++    (out, new_cursor)
+++}
+++
+++#[cfg(test)]
+++mod tests;
++diff --git a/crates/jcode-at-file/src/tests.rs b/crates/jcode-at-file/src/tests.rs
++new file mode 100644
++index 000000000..927e90067
++--- /dev/null
+++++ b/crates/jcode-at-file/src/tests.rs
++@@ -0,0 +1,205 @@
+++use super::*;
+++use std::fs;
+++use std::sync::atomic::AtomicBool;
+++
+++fn cand(path: &str) -> Candidate {
+++    let is_dir = path.ends_with('/');
+++    let trimmed = path.trim_end_matches('/');
+++    Candidate {
+++        path: path.to_string(),
+++        name: trimmed.rsplit('/').next().unwrap().to_string(),
+++        is_dir,
+++    }
+++}
+++
+++fn prefix(text: &str) -> Option<(usize, String, bool)> {
+++    extract_at_prefix(text, text.len()).map(|p| (p.start, p.query, p.quoted))
+++}
+++
+++#[test]
+++fn prefix_triggers() {
+++    assert_eq!(prefix("@"), Some((0, String::new(), false)));
+++    assert_eq!(prefix("@rea"), Some((0, "rea".into(), false)));
+++    assert_eq!(prefix("look at @src/ma"), Some((8, "src/ma".into(), false)));
+++    assert_eq!(prefix("(@x"), Some((1, "x".into(), false)));
+++    assert_eq!(prefix("`@x"), Some((1, "x".into(), false)));
+++    assert_eq!(prefix("see:\n@a"), Some((5, "a".into(), false)));
+++    assert_eq!(prefix("\u{3002}@a"), Some((3, "a".into(), false)));
+++}
+++
+++#[test]
+++fn prefix_rejects() {
+++    assert_eq!(prefix("email@x.com"), None);
+++    assert_eq!(prefix("hello"), None);
+++    assert_eq!(prefix("@a b"), None);
+++    assert_eq!(prefix(""), None);
+++}
+++
+++#[test]
+++fn prefix_quoted() {
+++    assert_eq!(prefix("@\"my fi"), Some((0, "my fi".into(), true)));
+++    assert_eq!(prefix("x @\""), Some((2, String::new(), true)));
+++    assert_eq!(prefix("@\"done\" more"), None);
+++    assert_eq!(prefix("a@\"x"), None);
+++}
+++
+++#[test]
+++fn prefix_mid_text_uses_cursor() {
+++    let text = "@rea tail";
+++    let p = extract_at_prefix(text, 4).unwrap();
+++    assert_eq!((p.start, p.query.as_str()), (0, "rea"));
+++}
+++
+++#[test]
+++fn scoring() {
+++    assert_eq!(score_entry(&cand("README.md"), "readme.md"), Some(100));
+++    assert_eq!(score_entry(&cand("README.md"), "rea"), Some(80));
+++    assert_eq!(score_entry(&cand("docs/README.md"), "adme"), Some(50));
+++    assert_eq!(score_entry(&cand("src/"), "src"), Some(110));
+++    assert_eq!(score_entry(&cand("src/lib/a.rs"), "lib/a"), Some(30));
+++    assert_eq!(score_entry(&cand("a.rs"), "zzz"), None);
+++    assert_eq!(score_entry(&cand("a.rs"), ""), Some(1));
+++}
+++
+++#[test]
+++fn ranking_order() {
+++    let ranked = rank(
+++        vec![
+++            cand("docs/readme.md"),
+++            cand("readme.md"),
+++            cand("xreadme/"),
+++            cand("README.txt"),
+++        ],
+++        "readme",
+++    );
+++    let paths: Vec<_> = ranked.iter().map(|c| c.path.as_str()).collect();
+++    // exact(100), starts-with(80) by depth then len (README.txt before docs/readme.md),
+++    // then the dir at contains 50 + 10.
+++    assert_eq!(paths, ["readme.md", "README.txt", "docs/readme.md", "xreadme/"]);
+++}
+++
+++#[test]
+++fn ranking_truncates() {
+++    let items: Vec<_> = (0..50).map(|i| cand(&format!("f{i:02}.rs"))).collect();
+++    assert_eq!(rank(items, "f").len(), MAX_RESULTS);
+++}
+++
+++#[test]
+++fn completion_file_and_dir() {
+++    let p = extract_at_prefix("see @sr", 7).unwrap();
+++    let (t, c) = apply_completion("see @sr", 7, &p, &cand("src/"));
+++    assert_eq!((t.as_str(), c), ("see @src/", 9));
+++    let (t, c) = apply_completion("see @sr", 7, &p, &cand("src/main.rs"));
+++    assert_eq!((t.as_str(), c), ("see @src/main.rs ", 17));
+++}
+++
+++#[test]
+++fn completion_quotes() {
+++    let p = extract_at_prefix("@\"my", 4).unwrap();
+++    let (t, c) = apply_completion("@\"my", 4, &p, &cand("my dir/"));
+++    assert_eq!(t, "@\"my dir/\"");
+++    assert_eq!(c, t.len() - 1);
+++    let (t, c) = apply_completion("@\"my", 4, &p, &cand("my file.txt"));
+++    assert_eq!(t, "@\"my file.txt\" ");
+++    assert_eq!(c, t.len());
+++    // Spaces in the path force quotes even when the prefix was plain.
+++    let p = extract_at_prefix("@my", 3).unwrap();
+++    let (t, _) = apply_completion("@my", 3, &p, &cand("my file.txt"));
+++    assert_eq!(t, "@\"my file.txt\" ");
+++}
+++
+++#[test]
+++fn completion_reuses_existing_closing_quote() {
+++    let text = "@\"my\" rest";
+++    let p = extract_at_prefix(text, 4).unwrap();
+++    let (t, _) = apply_completion(text, 4, &p, &cand("my file.txt"));
+++    assert_eq!(t, "@\"my file.txt\"  rest");
+++}
+++
+++fn tree() -> tempfile::TempDir {
+++    let d = tempfile::tempdir().unwrap();
+++    let r = d.path();
+++    fs::create_dir_all(r.join("src/deep")).unwrap();
+++    fs::create_dir_all(r.join(".git")).unwrap();
+++    fs::create_dir_all(r.join("target")).unwrap();
+++    fs::create_dir_all(r.join("real")).unwrap();
+++    fs::write(r.join("README.md"), "").unwrap();
+++    fs::write(r.join(".env"), "").unwrap();
+++    fs::write(r.join(".git/config"), "").unwrap();
+++    fs::write(r.join("target/junk.rs"), "").unwrap();
+++    fs::write(r.join("src/main.rs"), "").unwrap();
+++    fs::write(r.join("src/deep/mod.rs"), "").unwrap();
+++    fs::write(r.join("real/inner.txt"), "").unwrap();
+++    fs::write(r.join(".gitignore"), "target/\n").unwrap();
+++    // `ignore` only reads .gitignore inside a git work tree.
+++    fs::create_dir_all(r.join(".git/refs")).unwrap();
+++    fs::write(r.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+++    #[cfg(unix)]
+++    std::os::unix::fs::symlink(r.join("real"), r.join("link")).unwrap();
+++    d
+++}
+++
+++fn run(d: &tempfile::TempDir, q: &str) -> Vec<String> {
+++    let cancel = AtomicBool::new(false);
+++    search(d.path(), q, &cancel)
+++        .into_iter()
+++        .map(|c| c.path)
+++        .collect()
+++}
+++
+++#[test]
+++fn walker_basics() {
+++    let d = tree();
+++    let r = run(&d, "readm");
+++    assert_eq!(r.first().map(String::as_str), Some("README.md"));
+++    // dir bonus: `real/` (80+10) outranks README.md (80) for "rea", as in pi.
+++    assert_eq!(run(&d, "rea").first().map(String::as_str), Some("real/"));
+++    let all = run(&d, "");
+++    assert!(all.contains(&".env".to_string()), "hidden included");
+++    assert!(!all.iter().any(|p| p.starts_with(".git/") || p == ".git/"), ".git excluded");
+++    assert!(!all.iter().any(|p| p.starts_with("target/")), "gitignore respected");
+++    assert!(all.contains(&"src/deep/mod.rs".to_string()), "recursive");
+++}
+++
+++#[test]
+++fn walker_scoped() {
+++    let d = tree();
+++    let r = run(&d, "src/");
+++    assert!(r.contains(&"src/main.rs".to_string()));
+++    assert!(r.contains(&"src/deep/".to_string()));
+++    assert!(!r.contains(&"README.md".to_string()));
+++    let r = run(&d, "src/ma");
+++    assert_eq!(r, vec!["src/main.rs".to_string()]);
+++}
+++
+++#[test]
+++fn walker_unscoped_path_query_falls_back_to_full_path() {
+++    let d = tree();
+++    let r = run(&d, "nope/deep");
+++    assert!(r.is_empty());
+++    let r = run(&d, "deep/mo");
+++    assert_eq!(r, vec!["src/deep/mod.rs".to_string()]);
+++}
+++
+++#[cfg(unix)]
+++#[test]
+++fn walker_follows_symlinked_dir() {
+++    let d = tree();
+++    let r = run(&d, "inner");
+++    assert!(r.contains(&"link/inner.txt".to_string()), "{r:?}");
+++}
+++
+++#[test]
+++fn walker_absolute_scope() {
+++    let d = tree();
+++    let abs = format!("{}/src/", d.path().display());
+++    let r = run(&d, &abs);
+++    assert!(r.iter().any(|p| p.ends_with("src/main.rs")));
+++}
+++
+++#[test]
+++fn walker_cancel_returns_quickly() {
+++    let d = tree();
+++    let cancel = AtomicBool::new(true);
+++    assert!(search(d.path(), "", &cancel).len() <= 1);
+++}
++-- 
++2.56.0
++
+diff --git a/patches/0002-feat-at-file-TUI-state-keys-overlay-hooks-C1-phase-3.patch b/patches/0002-feat-at-file-TUI-state-keys-overlay-hooks-C1-phase-3.patch
+new file mode 100644
+index 000000000..2ad43f5ac
+--- /dev/null
++++ b/patches/0002-feat-at-file-TUI-state-keys-overlay-hooks-C1-phase-3.patch
+@@ -0,0 +1,727 @@
++From 9c0fa0381f76aa52a74a384b9598710814a150cf Mon Sep 17 00:00:00 2001
++From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
++Date: Thu, 29 Oct 2026 11:25:45 +0800
++Subject: [PATCH 2/4] feat(at-file): TUI state, keys, overlay, hooks [C1 phase
++ 3-6]
++
++---
++ Cargo.lock                                    |   1 +
++ crates/jcode-at-file/src/lib.rs               |  38 ++-
++ crates/jcode-at-file/src/tests.rs             |  12 +
++ crates/jcode-tui/Cargo.toml                   |   2 +
++ crates/jcode-tui/src/tui/app.rs               |   4 +
++ crates/jcode-tui/src/tui/app/at_file.rs       | 242 ++++++++++++++++++
++ crates/jcode-tui/src/tui/app/input.rs         |  12 +
++ crates/jcode-tui/src/tui/app/local.rs         |   1 +
++ crates/jcode-tui/src/tui/app/remote.rs        |   1 +
++ .../src/tui/app/state_ui_input_helpers.rs     |   5 +
++ crates/jcode-tui/src/tui/app/tui_lifecycle.rs |   4 +
++ crates/jcode-tui/src/tui/app/tui_state.rs     |   4 +
++ crates/jcode-tui/src/tui/mod.rs               |  12 +
++ crates/jcode-tui/src/tui/ui.rs                |   1 +
++ crates/jcode-tui/src/tui/ui_input.rs          |   3 +
++ crates/jcode-tui/src/tui/ui_input/at_file.rs  | 137 ++++++++++
++ 16 files changed, 477 insertions(+), 2 deletions(-)
++ create mode 100644 crates/jcode-tui/src/tui/app/at_file.rs
++ create mode 100644 crates/jcode-tui/src/tui/ui_input/at_file.rs
++
++diff --git a/Cargo.lock b/Cargo.lock
++index 5882e6b45..9455c5c15 100644
++--- a/Cargo.lock
+++++ b/Cargo.lock
++@@ -4406,6 +4406,7 @@ dependencies = [
++  "hex",
++  "image",
++  "jcode-app-core",
+++ "jcode-at-file",
++  "jcode-build-meta",
++  "jcode-config-types",
++  "jcode-core",
++diff --git a/crates/jcode-at-file/src/lib.rs b/crates/jcode-at-file/src/lib.rs
++index c6c0f489c..c4fb7184e 100644
++--- a/crates/jcode-at-file/src/lib.rs
+++++ b/crates/jcode-at-file/src/lib.rs
++@@ -33,6 +33,8 @@ pub struct AtPrefix {
++     pub query: String,
++     /// Prefix used the `@"..."` form.
++     pub quoted: bool,
+++    /// False for a Tab-forced plain path token (no `@` is inserted).
+++    pub at: bool,
++ }
++ 
++ fn is_wrapper(c: char) -> bool {
++@@ -64,6 +66,7 @@ pub fn extract_at_prefix(text: &str, cursor: usize) -> Option<AtPrefix> {
++                 start: pos,
++                 query: after_open.to_string(),
++                 quoted: true,
+++                at: true,
++             });
++         }
++     }
++@@ -85,6 +88,36 @@ pub fn extract_at_prefix(text: &str, cursor: usize) -> Option<AtPrefix> {
++         start: cursor - rest.len() - 1,
++         query: rest.to_string(),
++         quoted: false,
+++        at: true,
+++    })
+++}
+++
+++/// Tab-forced completion: the plain token ending at `cursor` (no `@` needed).
+++/// Prefers the `@` form when the token has one. `None` for an empty token.
+++pub fn extract_path_token(text: &str, cursor: usize) -> Option<AtPrefix> {
+++    if let Some(p) = extract_at_prefix(text, cursor) {
+++        return Some(p);
+++    }
+++    let cursor = cursor.min(text.len());
+++    if !text.is_char_boundary(cursor) {
+++        return None;
+++    }
+++    let before = &text[..cursor];
+++    let start = before
+++        .char_indices()
+++        .rev()
+++        .find(|(_, c)| is_boundary(*c))
+++        .map(|(i, c)| i + c.len_utf8())
+++        .unwrap_or(0);
+++    let token = &before[start..];
+++    if token.is_empty() || token.contains('"') {
+++        return None;
+++    }
+++    Some(AtPrefix {
+++        start,
+++        query: token.to_string(),
+++        quoted: false,
+++        at: false,
++     })
++ }
++ 
++@@ -238,10 +271,11 @@ pub fn apply_completion(
++ ) -> (String, usize) {
++     let cursor = cursor.min(text.len());
++     let needs_quotes = prefix.quoted || candidate.path.contains(' ');
+++    let at = if prefix.at { "@" } else { "" };
++     let mut value = if needs_quotes {
++-        format!("@\"{}\"", candidate.path)
+++        format!("{at}\"{}\"", candidate.path)
++     } else {
++-        format!("@{}", candidate.path)
+++        format!("{at}{}", candidate.path)
++     };
++     let mut after = &text[cursor..];
++     // Typing inside an existing `@"..."` pair: reuse its closing quote.
++diff --git a/crates/jcode-at-file/src/tests.rs b/crates/jcode-at-file/src/tests.rs
++index 927e90067..03405572b 100644
++--- a/crates/jcode-at-file/src/tests.rs
+++++ b/crates/jcode-at-file/src/tests.rs
++@@ -203,3 +203,15 @@ fn walker_cancel_returns_quickly() {
++     let cancel = AtomicBool::new(true);
++     assert!(search(d.path(), "", &cancel).len() <= 1);
++ }
+++
+++#[test]
+++fn forced_token_has_no_at() {
+++    let t = "open src/ma";
+++    let p = extract_path_token(t, t.len()).unwrap();
+++    assert_eq!((p.start, p.query.as_str(), p.at), (5, "src/ma", false));
+++    let (out, cur) = apply_completion(t, t.len(), &p, &cand("src/main.rs"));
+++    assert_eq!((out.as_str(), cur), ("open src/main.rs ", 17));
+++    assert!(extract_path_token("open ", 5).is_none());
+++    // An @ token keeps the @ form.
+++    assert!(extract_path_token("x @a", 4).unwrap().at);
+++}
++diff --git a/crates/jcode-tui/Cargo.toml b/crates/jcode-tui/Cargo.toml
++index 649f018fd..6e9532c55 100644
++--- a/crates/jcode-tui/Cargo.toml
+++++ b/crates/jcode-tui/Cargo.toml
++@@ -67,6 +67,8 @@ jcode-build-meta = { path = "../jcode-build-meta" }
++ jcode-logging = { path = "../jcode-logging" }
++ jcode-core = { path = "../jcode-core" }
++ jcode-fuzzy = { path = "../jcode-fuzzy" }
+++# CUSTOM (fork ledger C1): @file composer completion.
+++jcode-at-file = { path = "../jcode-at-file" }
++ jcode-config-types = { path = "../jcode-config-types" }
++ jcode-selfdev-types = { path = "../jcode-selfdev-types" }
++ jcode-session-types = { path = "../jcode-session-types" }
++diff --git a/crates/jcode-tui/src/tui/app.rs b/crates/jcode-tui/src/tui/app.rs
++index 397eb45e5..17e75f5c1 100644
++--- a/crates/jcode-tui/src/tui/app.rs
+++++ b/crates/jcode-tui/src/tui/app.rs
++@@ -97,6 +97,7 @@ pub(crate) mod onboarding_graph;
++ mod onboarding_repair;
++ mod onboarding_sim;
++ mod productivity;
+++mod at_file;
++ mod prompt_history;
++ mod remote;
++ mod remote_header_hint;
++@@ -1853,6 +1854,9 @@ pub struct App {
++     workspace_client: super::workspace_client::WorkspaceClientState,
++     /// Reverse prompt-history search overlay state (Ctrl+R). None = closed.
++     prompt_history_search: Option<prompt_history::PromptHistorySearchState>,
+++    // CUSTOM (fork ledger C1): `@file` completion popup + in-flight search.
+++    at_file: Option<at_file::AtFileState>,
+++    at_file_pending: Option<at_file::AtFilePending>,
++     /// Lazily-loaded persisted cross-session prompt history (oldest first,
++     /// deduped). None until first use; see `prompt_history.rs`.
++     persisted_prompt_history: Option<Vec<String>>,
++diff --git a/crates/jcode-tui/src/tui/app/at_file.rs b/crates/jcode-tui/src/tui/app/at_file.rs
++new file mode 100644
++index 000000000..598fb6c13
++--- /dev/null
+++++ b/crates/jcode-tui/src/tui/app/at_file.rs
++@@ -0,0 +1,242 @@
+++//! CUSTOM (dis446 fork, ledger C1): `@file` composer completion state.
+++//!
+++//! The pure logic lives in the `jcode-at-file` crate. This module owns the
+++//! popup state, key handling and the off-thread search. Typing `@` opens a
+++//! popup of files and directories under the session working directory. Up/Down
+++//! move, Tab/Enter accept, Esc closes. `@path` stays literal text: nothing is
+++//! expanded on submit (the model reads the file itself).
+++
+++use super::App;
+++use crossterm::event::{KeyCode, KeyModifiers};
+++use jcode_at_file::{AtPrefix, Candidate};
+++use std::path::PathBuf;
+++use std::sync::Arc;
+++use std::sync::atomic::{AtomicBool, Ordering};
+++use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+++use std::time::Duration;
+++
+++/// Wait this long for a search before leaving it to the idle tick.
+++const SYNC_WAIT: Duration = Duration::from_millis(15);
+++/// Hard cap for a Tab-forced (synchronous) search.
+++const FORCE_BUDGET: Duration = Duration::from_millis(400);
+++
+++pub(crate) struct AtFileState {
+++    prefix: AtPrefix,
+++    items: Vec<Candidate>,
+++    selected: usize,
+++}
+++
+++pub(crate) struct AtFilePending {
+++    id: u64,
+++    query: String,
+++    cancel: Arc<AtomicBool>,
+++    rx: Receiver<Vec<Candidate>>,
+++}
+++
+++impl Drop for AtFilePending {
+++    fn drop(&mut self) {
+++        self.cancel.store(true, Ordering::Relaxed);
+++    }
+++}
+++
+++fn next_request_id() -> u64 {
+++    use std::sync::atomic::AtomicU64;
+++    static NEXT: AtomicU64 = AtomicU64::new(1);
+++    NEXT.fetch_add(1, Ordering::Relaxed)
+++}
+++
+++fn spawn_search(cwd: PathBuf, query: String) -> AtFilePending {
+++    let cancel = Arc::new(AtomicBool::new(false));
+++    let (tx, rx) = channel();
+++    let flag = cancel.clone();
+++    let q = query.clone();
+++    std::thread::spawn(move || {
+++        let _ = tx.send(jcode_at_file::search(&cwd, &q, &flag));
+++    });
+++    AtFilePending {
+++        id: next_request_id(),
+++        query,
+++        cancel,
+++        rx,
+++    }
+++}
+++
+++impl App {
+++    fn at_file_cwd(&self) -> PathBuf {
+++        self.session
+++            .working_dir
+++            .as_deref()
+++            .map(PathBuf::from)
+++            .or_else(|| std::env::current_dir().ok())
+++            .unwrap_or_else(|| PathBuf::from("."))
+++    }
+++
+++    pub(crate) fn at_file_close(&mut self) {
+++        self.at_file = None;
+++        self.at_file_pending = None;
+++    }
+++
+++    pub(crate) fn at_file_view(&self) -> Option<crate::tui::AtFileView> {
+++        let state = self.at_file.as_ref()?;
+++        if state.items.is_empty() {
+++            return None;
+++        }
+++        Some(crate::tui::AtFileView {
+++            rows: state
+++                .items
+++                .iter()
+++                .map(|c| (c.name.clone(), c.path.clone(), c.is_dir))
+++                .collect(),
+++            selected: state.selected,
+++        })
+++    }
+++
+++    /// Re-evaluate the popup after a typed character or backspace.
+++    pub(crate) fn at_file_after_edit(&mut self) {
+++        let Some(prefix) = jcode_at_file::extract_at_prefix(&self.input, self.cursor_pos) else {
+++            self.at_file_close();
+++            return;
+++        };
+++        // Same token and query as the visible list: nothing to do.
+++        if let Some(state) = &self.at_file
+++            && state.prefix == prefix
+++        {
+++            return;
+++        }
+++        let pending = spawn_search(self.at_file_cwd(), prefix.query.clone());
+++        // Brief wait keeps the popup in step with fast typing on small trees.
+++        match pending.rx.recv_timeout(SYNC_WAIT) {
+++            Ok(items) => {
+++                self.at_file_pending = None;
+++                self.at_file_set(prefix, items);
+++            }
+++            Err(RecvTimeoutError::Timeout) => {
+++                // Newer request replaces (and cancels) the older one via Drop.
+++                self.at_file_pending = Some(pending);
+++            }
+++            Err(RecvTimeoutError::Disconnected) => self.at_file_close(),
+++        }
+++    }
+++
+++    fn at_file_set(&mut self, prefix: AtPrefix, items: Vec<Candidate>) {
+++        if items.is_empty() {
+++            self.at_file = None;
+++            return;
+++        }
+++        self.at_file = Some(AtFileState {
+++            prefix,
+++            items,
+++            selected: 0,
+++        });
+++    }
+++
+++    /// Idle tick: adopt a finished search unless the text moved on. True = redraw.
+++    pub(crate) fn poll_at_file(&mut self) -> bool {
+++        let Some(pending) = &self.at_file_pending else {
+++            return false;
+++        };
+++        let items = match pending.rx.try_recv() {
+++            Ok(items) => items,
+++            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+++            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+++                self.at_file_pending = None;
+++                return false;
+++            }
+++        };
+++        let (id, query) = (pending.id, pending.query.clone());
+++        self.at_file_pending = None;
+++        let _ = id;
+++        // Stale check: the cursor token must still be the one searched for.
+++        match jcode_at_file::extract_at_prefix(&self.input, self.cursor_pos) {
+++            Some(prefix) if prefix.query == query => {
+++                self.at_file_set(prefix, items);
+++                true
+++            }
+++            _ => false,
+++        }
+++    }
+++
+++    pub(super) fn handle_at_file_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+++        let Some(state) = self.at_file.as_mut() else {
+++            return false;
+++        };
+++        if state.items.is_empty() {
+++            return false;
+++        }
+++        let plain_nav = !modifiers.intersects(
+++            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::HYPER,
+++        );
+++        let len = state.items.len() as i32;
+++        let mut step = |state: &mut AtFileState, d: i32| {
+++            state.selected = (state.selected as i32 + d).rem_euclid(len) as usize;
+++        };
+++        match code {
+++            KeyCode::Down if plain_nav => step(state, 1),
+++            KeyCode::Up if plain_nav => step(state, -1),
+++            KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => step(state, 1),
+++            KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => step(state, -1),
+++            KeyCode::Tab | KeyCode::Enter if modifiers.is_empty() => {
+++                self.at_file_accept();
+++            }
+++            KeyCode::Esc if modifiers.is_empty() => self.at_file_close(),
+++            _ => return false,
+++        }
+++        true
+++    }
+++
+++    fn at_file_accept(&mut self) {
+++        let Some(state) = self.at_file.take() else {
+++            return;
+++        };
+++        self.at_file_pending = None;
+++        let Some(candidate) = state.items.get(state.selected) else {
+++            return;
+++        };
+++        self.at_file_apply(&state.prefix, candidate);
+++        // Directories keep the popup open so the user can keep drilling.
+++        if candidate.is_dir {
+++            self.at_file_after_edit();
+++        }
+++    }
+++
+++    fn at_file_apply(&mut self, prefix: &AtPrefix, candidate: &Candidate) {
+++        self.remember_input_undo_state();
+++        let (text, cursor) =
+++            jcode_at_file::apply_completion(&self.input, self.cursor_pos, prefix, candidate);
+++        self.input = text;
+++        self.cursor_pos = cursor;
+++        self.tab_completion_state = None;
+++        self.sync_model_picker_preview_from_input();
+++    }
+++
+++    /// Tab on a non-slash token: complete it as a path. One match applies at
+++    /// once, several open the popup. Returns whether Tab was consumed.
+++    pub(crate) fn at_file_force_complete(&mut self) -> bool {
+++        let Some(prefix) = jcode_at_file::extract_path_token(&self.input, self.cursor_pos) else {
+++            return false;
+++        };
+++        let cancel = Arc::new(AtomicBool::new(false));
+++        let timer = cancel.clone();
+++        std::thread::spawn(move || {
+++            std::thread::sleep(FORCE_BUDGET);
+++            timer.store(true, Ordering::Relaxed);
+++        });
+++        let items = jcode_at_file::search(&self.at_file_cwd(), &prefix.query, &cancel);
+++        cancel.store(true, Ordering::Relaxed);
+++        match items.len() {
+++            0 => false,
+++            1 => {
+++                let candidate = items[0].clone();
+++                self.at_file_apply(&prefix, &candidate);
+++                if candidate.is_dir {
+++                    self.at_file_after_edit();
+++                }
+++                true
+++            }
+++            _ => {
+++                self.at_file_set(prefix, items);
+++                true
+++            }
+++        }
+++    }
+++}
++diff --git a/crates/jcode-tui/src/tui/app/input.rs b/crates/jcode-tui/src/tui/app/input.rs
++index abadfdee8..edadb6dbf 100644
++--- a/crates/jcode-tui/src/tui/app/input.rs
+++++ b/crates/jcode-tui/src/tui/app/input.rs
++@@ -967,6 +967,12 @@ fn insert_input_text_with_undo(app: &mut App, text: &str, typed: bool) {
++ 
++     app.reset_tab_completion();
++     app.sync_model_picker_preview_from_input();
+++    // CUSTOM (C1): typing drives the @file popup, paste cancels it.
+++    if typed {
+++        app.at_file_after_edit();
+++    } else {
+++        app.at_file_close();
+++    }
++ }
++ 
++ pub(super) fn handle_text_input(app: &mut App, text: &str) -> bool {
++@@ -2909,6 +2915,7 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
++                 app.cursor_pos = prev;
++                 app.reset_tab_completion();
++                 app.sync_model_picker_preview_from_input();
+++                app.at_file_after_edit(); // CUSTOM (C1)
++             }
++             true
++         }
++@@ -3226,6 +3233,11 @@ impl App {
++             return Ok(());
++         }
++ 
+++        // CUSTOM (C1): the @file popup, when visible, owns Up/Down/Tab/Enter/Esc.
+++        if self.handle_at_file_key(code, modifiers) {
+++            return Ok(());
+++        }
+++
++         if self.handle_command_suggestion_key(code, modifiers) {
++             return Ok(());
++         }
++diff --git a/crates/jcode-tui/src/tui/app/local.rs b/crates/jcode-tui/src/tui/app/local.rs
++index 915383615..edde0c766 100644
++--- a/crates/jcode-tui/src/tui/app/local.rs
+++++ b/crates/jcode-tui/src/tui/app/local.rs
++@@ -133,6 +133,7 @@ pub(super) fn handle_tick(app: &mut App) -> bool {
++     needs_redraw |= app.prune_irrelevant_background_tasks();
++     needs_redraw |= app.refresh_side_panel_linked_content_if_due();
++     needs_redraw |= app.poll_model_picker_load();
+++    needs_redraw |= app.poll_at_file(); // CUSTOM (C1)
++     needs_redraw |= app.poll_session_picker_load();
++     needs_redraw |= app.poll_session_picker_presence();
++     needs_redraw |= app.onboarding_tick();
++diff --git a/crates/jcode-tui/src/tui/app/remote.rs b/crates/jcode-tui/src/tui/app/remote.rs
++index f220cf67d..22520c2d8 100644
++--- a/crates/jcode-tui/src/tui/app/remote.rs
+++++ b/crates/jcode-tui/src/tui/app/remote.rs
++@@ -200,6 +200,7 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
++     needs_redraw |= app.prune_irrelevant_background_tasks();
++     needs_redraw |= app.refresh_side_panel_linked_content_if_due();
++     needs_redraw |= app.poll_model_picker_load();
+++    needs_redraw |= app.poll_at_file(); // CUSTOM (C1)
++     needs_redraw |= app.poll_session_picker_load();
++     needs_redraw |= app.poll_session_picker_presence();
++     needs_redraw |= app.onboarding_tick();
++diff --git a/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs b/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
++index d16593ef7..d3c134613 100644
++--- a/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
+++++ b/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
++@@ -1579,6 +1579,11 @@ impl App {
++         // Get suggestions for current input
++         let current_suggestions = self.get_suggestions_for(&self.input);
++ 
+++        // CUSTOM (C1): Tab on a non-slash token forces file completion.
+++        if current_suggestions.is_empty() && self.at_file_force_complete() {
+++            return true;
+++        }
+++
++         // Check if we're continuing a tab cycle from a previous base
++         if let Some((ref base, idx)) = self.tab_completion_state.clone() {
++             let base_suggestions = self.get_suggestions_for(base);
++diff --git a/crates/jcode-tui/src/tui/app/tui_lifecycle.rs b/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
++index 49ed8f2a9..f779d09a8 100644
++--- a/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
+++++ b/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
++@@ -750,6 +750,8 @@ impl App {
++             last_overnight_card_refresh: None,
++             workspace_client: crate::tui::workspace_client::WorkspaceClientState::default(),
++             prompt_history_search: None,
+++            at_file: None,
+++            at_file_pending: None,
++             persisted_prompt_history: None,
++         };
++ 
++@@ -1235,6 +1237,8 @@ impl App {
++             last_overnight_card_refresh: None,
++             workspace_client: crate::tui::workspace_client::WorkspaceClientState::default(),
++             prompt_history_search: None,
+++            at_file: None,
+++            at_file_pending: None,
++             persisted_prompt_history: None,
++         };
++ 
++diff --git a/crates/jcode-tui/src/tui/app/tui_state.rs b/crates/jcode-tui/src/tui/app/tui_state.rs
++index b0748c23b..99439d239 100644
++--- a/crates/jcode-tui/src/tui/app/tui_state.rs
+++++ b/crates/jcode-tui/src/tui/app/tui_state.rs
++@@ -1021,6 +1021,10 @@ impl crate::tui::TuiState for App {
++         self.command_suggestion_selected
++     }
++ 
+++    fn at_file_view(&self) -> Option<crate::tui::AtFileView> {
+++        App::at_file_view(self)
+++    }
+++
++     fn prompt_history_search(&self) -> Option<crate::tui::PromptHistorySearchView> {
++         self.prompt_history_search_view()
++     }
++diff --git a/crates/jcode-tui/src/tui/mod.rs b/crates/jcode-tui/src/tui/mod.rs
++index 72387de7c..76e2595d3 100644
++--- a/crates/jcode-tui/src/tui/mod.rs
+++++ b/crates/jcode-tui/src/tui/mod.rs
++@@ -865,6 +865,10 @@ pub trait TuiState {
++     fn prompt_history_search(&self) -> Option<PromptHistorySearchView> {
++         None
++     }
+++    /// CUSTOM (fork ledger C1): visible `@file` completion popup, if any.
+++    fn at_file_view(&self) -> Option<AtFileView> {
+++        None
+++    }
++     fn active_skill(&self) -> Option<String>;
++     fn subagent_status(&self) -> Option<String>;
++     /// Progress of a currently-running batch tool call.
++@@ -1499,6 +1503,14 @@ pub struct PromptHistorySearchView {
++     pub selected: usize,
++ }
++ 
+++/// CUSTOM (fork ledger C1): render snapshot of the `@file` popup.
+++#[derive(Debug, Clone, PartialEq, Eq)]
+++pub struct AtFileView {
+++    /// (name, display path, is_dir)
+++    pub rows: Vec<(String, String, bool)>,
+++    pub selected: usize,
+++}
+++
++ /// What the first-run onboarding welcome screen should render in its body,
++ /// driven by the active onboarding flow phase. `Suggestions` is the default
++ /// resting state (the starter prompt cards).
++diff --git a/crates/jcode-tui/src/tui/ui.rs b/crates/jcode-tui/src/tui/ui.rs
++index 6d9c92a8d..992fc53cd 100644
++--- a/crates/jcode-tui/src/tui/ui.rs
+++++ b/crates/jcode-tui/src/tui/ui.rs
++@@ -3570,6 +3570,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
++     // over existing rows (blank space, pinned footer, or the transcript tail)
++     // instead of reserving layout height and shoving everything around.
++     input_ui::draw_command_suggestions_overlay(frame, app, chunks[7]);
+++    input_ui::draw_at_file_overlay(frame, app, chunks[7]); // CUSTOM (C1)
++ 
++     // Ctrl+R reverse prompt-history search overlay (drawn after the command
++     // palette so it wins when both could be visible).
++diff --git a/crates/jcode-tui/src/tui/ui_input.rs b/crates/jcode-tui/src/tui/ui_input.rs
++index a63e9ddf5..6fa957e70 100644
++--- a/crates/jcode-tui/src/tui/ui_input.rs
+++++ b/crates/jcode-tui/src/tui/ui_input.rs
++@@ -1,3 +1,6 @@
+++#[path = "ui_input/at_file.rs"]
+++mod at_file; // CUSTOM (C1)
+++pub(super) use at_file::draw_at_file_overlay;
++ #[path = "ui_input/command_suggestions.rs"]
++ mod command_suggestions;
++ use command_suggestions::*;
++diff --git a/crates/jcode-tui/src/tui/ui_input/at_file.rs b/crates/jcode-tui/src/tui/ui_input/at_file.rs
++new file mode 100644
++index 000000000..a4fa8d8eb
++--- /dev/null
+++++ b/crates/jcode-tui/src/tui/ui_input/at_file.rs
++@@ -0,0 +1,137 @@
+++// CUSTOM (dis446 fork, ledger C1): `@file` completion popup. Floats like the
+++// command palette (no layout height). Rows never wrap: truncated by width.
+++use super::*;
+++use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+++
+++const VISIBLE_ROWS: usize = 5;
+++
+++fn truncate_width(text: &str, max: usize) -> String {
+++    if UnicodeWidthStr::width(text) <= max {
+++        return text.to_string();
+++    }
+++    if max == 0 {
+++        return String::new();
+++    }
+++    let mut out = String::new();
+++    let mut used = 0;
+++    for ch in text.chars() {
+++        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+++        if used + w + 1 > max {
+++            break;
+++        }
+++        out.push(ch);
+++        used += w;
+++    }
+++    out.push('…');
+++    out
+++}
+++
+++fn window_start(selected: usize, count: usize) -> usize {
+++    if count <= VISIBLE_ROWS {
+++        0
+++    } else {
+++        (selected + 1)
+++            .saturating_sub(VISIBLE_ROWS)
+++            .min(count - VISIBLE_ROWS)
+++    }
+++}
+++
+++pub(in crate::tui::ui) fn at_file_lines(
+++    view: &crate::tui::AtFileView,
+++    width: usize,
+++) -> Vec<Line<'static>> {
+++    let start = window_start(view.selected, view.rows.len());
+++    let mut lines = Vec::new();
+++    for (i, (name, path, is_dir)) in view
+++        .rows
+++        .iter()
+++        .enumerate()
+++        .skip(start)
+++        .take(VISIBLE_ROWS)
+++    {
+++        let selected = i == view.selected;
+++        let marker = if selected { "▸ " } else { "  " };
+++        let label = if *is_dir && !name.ends_with('/') {
+++            format!("{name}/")
+++        } else {
+++            name.clone()
+++        };
+++        let label_style = if selected {
+++            Style::default().fg(rgb(255, 213, 128))
+++        } else {
+++            Style::default().fg(rgb(128, 203, 196))
+++        };
+++        let budget = width.saturating_sub(2);
+++        let label = truncate_width(&label, budget);
+++        let remaining = budget.saturating_sub(UnicodeWidthStr::width(label.as_str()) + 2);
+++        let mut spans = vec![
+++            Span::styled(marker.to_string(), label_style),
+++            Span::styled(label, label_style),
+++        ];
+++        if remaining >= 4 {
+++            spans.push(Span::styled(
+++                format!("  {}", truncate_width(path, remaining)),
+++                Style::default().fg(dim_color()),
+++            ));
+++        }
+++        lines.push(Line::from(spans));
+++    }
+++    lines
+++}
+++
+++pub(in crate::tui::ui) fn draw_at_file_overlay(frame: &mut Frame, app: &dyn TuiState, area: Rect) {
+++    let Some(view) = app.at_file_view() else {
+++        return;
+++    };
+++    let mut lines = at_file_lines(&view, area.width as usize);
+++    let Some(rect) = command_suggestions_overlay_rect(area, lines.len() as u16, frame.area())
+++    else {
+++        return;
+++    };
+++    lines.truncate(rect.height as usize);
+++    frame.render_widget(ratatui::widgets::Clear, rect);
+++    frame.render_widget(Paragraph::new(lines), rect);
+++}
+++
+++#[cfg(test)]
+++mod tests {
+++    use super::*;
+++
+++    fn view(n: usize, selected: usize) -> crate::tui::AtFileView {
+++        crate::tui::AtFileView {
+++            rows: (0..n)
+++                .map(|i| (format!("file{i}.rs"), format!("src/file{i}.rs"), false))
+++                .collect(),
+++            selected,
+++        }
+++    }
+++
+++    #[test]
+++    fn shows_five_rows_and_scrolls() {
+++        assert_eq!(at_file_lines(&view(12, 0), 60).len(), 5);
+++        assert_eq!(window_start(0, 12), 0);
+++        assert_eq!(window_start(4, 12), 0);
+++        assert_eq!(window_start(5, 12), 1);
+++        assert_eq!(window_start(11, 12), 7);
+++    }
+++
+++    #[test]
+++    fn rows_never_exceed_width() {
+++        for width in [8usize, 12, 20, 40] {
+++            for line in at_file_lines(&view(3, 1), width) {
+++                let w: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+++                assert!(w <= width, "row width {w} > {width}");
+++            }
+++        }
+++    }
+++
+++    #[test]
+++    fn dirs_get_slash() {
+++        let v = crate::tui::AtFileView {
+++            rows: vec![("src".into(), "src/".into(), true)],
+++            selected: 0,
+++        };
+++        let text: String = at_file_lines(&v, 40)[0].spans.iter().map(|s| s.content.to_string()).collect();
+++        assert!(text.contains("src/"));
+++    }
+++}
++-- 
++2.56.0
++
+diff --git a/patches/0003-test-at-file-app-level-key-path-tests-C1.patch b/patches/0003-test-at-file-app-level-key-path-tests-C1.patch
+new file mode 100644
+index 000000000..9c6ca44f1
+--- /dev/null
++++ b/patches/0003-test-at-file-app-level-key-path-tests-C1.patch
+@@ -0,0 +1,179 @@
++From d17d5cc921b3dc6f08f76c114cf815269c5a9744 Mon Sep 17 00:00:00 2001
++From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
++Date: Thu, 29 Oct 2026 11:28:38 +0800
++Subject: [PATCH 3/4] test(at-file): app-level key path tests [C1]
++
++---
++ crates/jcode-tui/src/tui/app/at_file.rs       |   2 +-
++ crates/jcode-tui/src/tui/app/tests.rs         |   1 +
++ .../src/tui/app/tests/at_file_picker.rs       | 133 ++++++++++++++++++
++ 3 files changed, 135 insertions(+), 1 deletion(-)
++ create mode 100644 crates/jcode-tui/src/tui/app/tests/at_file_picker.rs
++
++diff --git a/crates/jcode-tui/src/tui/app/at_file.rs b/crates/jcode-tui/src/tui/app/at_file.rs
++index 598fb6c13..092b81e0f 100644
++--- a/crates/jcode-tui/src/tui/app/at_file.rs
+++++ b/crates/jcode-tui/src/tui/app/at_file.rs
++@@ -167,7 +167,7 @@ impl App {
++             KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::HYPER,
++         );
++         let len = state.items.len() as i32;
++-        let mut step = |state: &mut AtFileState, d: i32| {
+++        let step = |state: &mut AtFileState, d: i32| {
++             state.selected = (state.selected as i32 + d).rem_euclid(len) as usize;
++         };
++         match code {
++diff --git a/crates/jcode-tui/src/tui/app/tests.rs b/crates/jcode-tui/src/tui/app/tests.rs
++index f23dc5be2..38f885651 100644
++--- a/crates/jcode-tui/src/tui/app/tests.rs
+++++ b/crates/jcode-tui/src/tui/app/tests.rs
++@@ -64,6 +64,7 @@ include!("tests/issue_998_model_status_overlay.rs");
++ include!("tests/issue_1685_bounded_auto_resume.rs");
++ include!("tests/spinner_slash_commands.rs");
++ include!("tests/command_suggestions_cache.rs");
+++include!("tests/at_file_picker.rs"); // CUSTOM (C1)
++ include!("tests/merge_command.rs");
++ include!("tests/skill_invocation_multi_word.rs");
++ include!("tests/remote_header_hint_facts.rs");
++diff --git a/crates/jcode-tui/src/tui/app/tests/at_file_picker.rs b/crates/jcode-tui/src/tui/app/tests/at_file_picker.rs
++new file mode 100644
++index 000000000..7a963f25c
++--- /dev/null
+++++ b/crates/jcode-tui/src/tui/app/tests/at_file_picker.rs
++@@ -0,0 +1,133 @@
+++// CUSTOM (fork ledger C1): `@file` popup behavior through the real key path.
+++
+++fn at_file_app(files: &[&str]) -> (App, tempfile::TempDir) {
+++    let dir = tempfile::tempdir().unwrap();
+++    for f in files {
+++        let p = dir.path().join(f);
+++        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+++        std::fs::write(p, "").unwrap();
+++    }
+++    let mut app = create_test_app();
+++    app.session.working_dir = Some(dir.path().to_string_lossy().into_owned());
+++    (app, dir)
+++}
+++
+++fn type_str(app: &mut App, s: &str) {
+++    for c in s.chars() {
+++        app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+++    }
+++    // Searches may finish on the idle tick.
+++    for _ in 0..200 {
+++        if app.at_file_pending.is_none() {
+++            break;
+++        }
+++        std::thread::sleep(std::time::Duration::from_millis(5));
+++        app.poll_at_file();
+++    }
+++}
+++
+++fn first_row(app: &App) -> Option<String> {
+++    app.at_file_view().map(|v| v.rows[0].1.clone())
+++}
+++
+++#[test]
+++fn at_file_t_at_opens_popup_and_best_match_is_first() {
+++    let (mut app, _d) = at_file_app(&["README.md", "src/main.rs"]);
+++    type_str(&mut app, "@readm");
+++    assert_eq!(first_row(&app).as_deref(), Some("README.md"));
+++}
+++
+++#[test]
+++fn at_file_t_email_does_not_open_popup() {
+++    let (mut app, _d) = at_file_app(&["README.md"]);
+++    type_str(&mut app, "mail me at x@rea");
+++    assert!(app.at_file_view().is_none());
+++}
+++
+++#[test]
+++fn at_file_t_enter_accepts_and_does_not_submit() {
+++    let (mut app, _d) = at_file_app(&["README.md"]);
+++    type_str(&mut app, "see @readm");
+++    app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+++    assert_eq!(app.input, "see @README.md ");
+++    assert_eq!(app.cursor_pos, app.input.len());
+++    assert!(app.at_file_view().is_none());
+++    assert!(app.display_messages.iter().all(|m| !m.content.contains("README")));
+++}
+++
+++#[test]
+++fn at_file_t_tab_on_dir_keeps_drilling() {
+++    let (mut app, _d) = at_file_app(&["src/main.rs", "src/lib.rs"]);
+++    type_str(&mut app, "@sr");
+++    app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+++    assert_eq!(app.input, "@src/");
+++    let rows: Vec<_> = app.at_file_view().expect("popup stays open").rows;
+++    assert!(rows.iter().any(|r| r.1 == "src/main.rs"));
+++}
+++
+++#[test]
+++fn at_file_t_esc_closes_popup_before_clearing_input() {
+++    let (mut app, _d) = at_file_app(&["README.md"]);
+++    type_str(&mut app, "@rea");
+++    app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+++    assert!(app.at_file_view().is_none());
+++    assert_eq!(app.input, "@rea");
+++}
+++
+++#[test]
+++fn at_file_t_up_down_move_selection_and_wrap() {
+++    let (mut app, _d) = at_file_app(&["a1.rs", "a2.rs"]);
+++    type_str(&mut app, "@a");
+++    app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+++    assert_eq!(app.at_file_view().unwrap().selected, 1);
+++    app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+++    assert_eq!(app.at_file_view().unwrap().selected, 0);
+++    app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
+++    assert_eq!(app.at_file_view().unwrap().selected, 1);
+++}
+++
+++#[test]
+++fn at_file_t_backspace_updates_and_closes() {
+++    let (mut app, _d) = at_file_app(&["README.md"]);
+++    type_str(&mut app, "@readm");
+++    app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+++    assert!(app.at_file_view().is_some());
+++    for _ in 0..4 {
+++        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+++    }
+++    assert_eq!(app.input, "@");
+++    app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+++    assert!(app.at_file_view().is_none());
+++}
+++
+++#[test]
+++fn at_file_t_paste_never_opens_popup() {
+++    let (mut app, _d) = at_file_app(&["README.md"]);
+++    app.handle_paste("@readm".to_string());
+++    assert!(app.at_file_view().is_none());
+++}
+++
+++#[test]
+++fn at_file_t_tab_forces_path_completion_on_plain_token() {
+++    let (mut app, _d) = at_file_app(&["only_one.txt"]);
+++    type_str(&mut app, "cat only_o");
+++    app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+++    assert_eq!(app.input, "cat only_one.txt ");
+++}
+++
+++#[test]
+++fn at_file_t_slash_commands_unchanged() {
+++    let (mut app, _d) = at_file_app(&["model.rs"]);
+++    type_str(&mut app, "/mod");
+++    assert!(app.at_file_view().is_none());
+++    assert!(!app.command_suggestions().is_empty());
+++}
+++
+++#[test]
+++fn at_file_t_undo_restores_pre_completion_input() {
+++    let (mut app, _d) = at_file_app(&["README.md"]);
+++    type_str(&mut app, "@readm");
+++    app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+++    app.undo_input_change();
+++    assert_eq!(app.input, "@readm");
+++}
++-- 
++2.56.0
++
+diff --git a/patches/0004-fix-at-file-hook-remote-mode-key-path-and-backspace-.patch b/patches/0004-fix-at-file-hook-remote-mode-key-path-and-backspace-.patch
+new file mode 100644
+index 000000000..7e5af4128
+--- /dev/null
++++ b/patches/0004-fix-at-file-hook-remote-mode-key-path-and-backspace-.patch
+@@ -0,0 +1,37 @@
++From 9a7f878707c52db0b5fcf6a62829bb2995f17810 Mon Sep 17 00:00:00 2001
++From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
++Date: Thu, 29 Oct 2026 12:01:41 +0800
++Subject: [PATCH 4/4] fix(at-file): hook remote-mode key path and backspace
++ [C1]
++
++---
++ crates/jcode-tui/src/tui/app/remote/key_handling.rs | 6 ++++++
++ 1 file changed, 6 insertions(+)
++
++diff --git a/crates/jcode-tui/src/tui/app/remote/key_handling.rs b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
++index cc13736ef..1b2a097fc 100644
++--- a/crates/jcode-tui/src/tui/app/remote/key_handling.rs
+++++ b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
++@@ -686,6 +686,11 @@ async fn handle_remote_key_internal(
++         }
++     }
++ 
+++    // CUSTOM (C1): the @file popup owns Up/Down/Tab/Enter/Esc while visible.
+++    if app.handle_at_file_key(code, modifiers) {
+++        return Ok(());
+++    }
+++
++     if app.handle_command_suggestion_key(code, modifiers) {
++         return Ok(());
++     }
++@@ -969,6 +974,7 @@ async fn handle_remote_key_internal(
++                 app.cursor_pos = prev;
++                 app.reset_tab_completion();
++                 app.sync_model_picker_preview_from_input();
+++                app.at_file_after_edit(); // CUSTOM (C1)
++             }
++         }
++         KeyCode::Delete => {
++-- 
++2.56.0
++
+diff --git a/plans/at-file-picker.md b/plans/at-file-picker.md
+new file mode 100644
+index 000000000..50d46702a
+--- /dev/null
++++ b/plans/at-file-picker.md
+@@ -0,0 +1,274 @@
++# Plan: native `@file` picker in jcode (pi parity)
++
++Status: draft, not started. Target: local jcode v0.99.1 (same version as the installed binary).
++Owner: user. Scope: your own build only. Optionally upstream later.
++
++## Goal
++
++Typing `@` in the jcode composer opens a fuzzy file popup, exactly like pi. Same
++trigger rules, same ranking, same keys, same inserted text. Nothing else changes.
++
++## What pi does (the spec)
++
++Source: `@earendil-works/pi-tui@1.4.0` (`dist/autocomplete.js`, `dist/components/editor.js`,
++`dist/fuzzy.js`) and `pi-coding-agent@1.4.0` (`modes/interactive/interactive-mode.js`,
++`core/tools/path-utils.js`).
++
++### 1. Completion only, no expansion on submit
++
++`@path` stays literal text in the message. pi does not read the file on submit.
++The model reads it with its `read` tool, which strips a leading `@` (`stripAtPrefix`).
++So jcode needs the **editor popup only**. No change to message building or the provider path.
++(The `@file` CLI-argument path in `cli/file-processor.js` is a different feature, out of scope.)
++
++### 2. Trigger
++
++- Auto-trigger when typing `@` at a token start. Token start means start of line, after
++  whitespace, or after an opening wrapper `( [ { < \``, or after CJK punctuation.
++  Regex: `autocompleteBoundaryRegex` + `[([{<\`]*` + `@` + non-separator chars, anchored at the cursor.
++- Keeps updating on every letter, digit, `.`, `-`, `_` typed while open.
++- `@"` starts a quoted form. The token then runs to the closing quote and may contain spaces.
++- `#` is also a default trigger char in pi (provider hook). Skip it unless you want it.
++- Tab forces path completion on any token (not only `@`), see section 6.
++- Not triggered while pasting (paste cancels autocomplete).
++- Debounce 20 ms for the `@` case, 0 ms for Tab and slash commands.
++
++### 3. Candidate source
++
++- Spawns `fd` (`--base-directory <cwd> --max-results 100 --type f --type d --follow --hidden`,
++  excludes `.git`, `--full-path` when the query has `/`).
++- Two passes merged and de-duplicated: depth-1 entries first, then recursive.
++- The query is turned into a regex: no `/` means the escaped query. With `/`, segments are
++  escaped and joined with `[\\/]` (trailing `/` kept).
++- Scoped queries: `@src/foo` splits at the last `/`. The base dir is resolved (`~/`, absolute, or
++  relative to cwd) and must exist, else no scoping.
++- Respects `.gitignore` (fd default). Hidden files included.
++
++### 4. Ranking (`scoreEntry`, not the fuzzy module)
++
++On the file name (case-insensitive): exact 100, starts-with 80, contains 50. Else full-path
++contains 30. Else dropped. Directories get +10 when score > 0. Empty query scores 1.
++Sort: score desc, then path depth asc, then path length asc, then alphabetical. Keep top 20.
++
++Note: `fuzzy.js` (subsequence scorer) is used for slash commands, not for `@` files. The `@` list is
++substring-ranked on top of fd's regex filter.
++
++### 5. List UI
++
++- Max 5 rows visible by default (clamped 3 to 20). Row = label (name, `/` suffix for dirs)
++  plus dim description (display path).
++- Best-match row preselected. Up/Down move. Mouse click supported.
++- Empty result closes the popup.
++
++### 6. Keys and completion
++
++| Key | Behavior |
++| --- | --- |
++| Up / Down | move selection |
++| Tab | accept selected |
++| Enter | accept selected (for `@`, do not submit) |
++| Esc | close |
++| Tab with no popup | force file completion on the current token. One match: apply immediately |
++
++Apply rules:
++- Value is `@path`, quoted as `@"path with spaces"` when it has a separator or the prefix was quoted.
++- Directory: no trailing space, so you can keep drilling (`@src/` then more letters).
++- File: append one space.
++- Quoted dir: cursor lands before the closing quote.
++- Push an undo snapshot before applying.
++
++### 7. Races
++
++Each request carries a token. A result is dropped if the text or cursor changed, the request was
++aborted, or a newer request started. In-flight `fd` is killed on abort. Requests are serialized.
++
++## What jcode has today (the seams)
++
++All paths relative to the jcode source root. Verified in the v0.99.1 checkout.
++
++- `crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs`
++  - `command_suggestions()` (memoized per frame, epoch + signature) returns `Vec<(String, &'static str)>`.
++  - `accept_selected_command_suggestion()`, `move_command_suggestion_selection()`,
++    `handle_command_suggestion_key()` (Up/Down, Ctrl+J/K, Enter).
++  - `autocomplete()` is the Tab handler (slash-token cycling).
++- `crates/jcode-tui/src/tui/app/input.rs`
++  - `handle_key_core()` routes keys. `handle_command_suggestion_key` runs before the control shortcuts.
++  - `insert_input_text_with_undo()` is the single insertion point (typing and paste share it).
++  - `handle_paste()` at line ~338 and ~3423. `remember_input_undo_state()` for undo.
++  - `KeyCode::Tab` calls `app.autocomplete()`.
++- `crates/jcode-tui/src/tui/ui_input.rs`
++  - `draw_command_suggestions_overlay()`, `command_suggestions_overlay_rect()` (below input, flips above),
++    `command_suggestion_lines()` in `ui_input/command_suggestions.rs`. Overlay reserves no layout height.
++- `crates/jcode-fuzzy/src/lib.rs`: `fuzzy_match`, `fuzzy_score`, `PreparedTokenQuery`, highlight positions.
++- Working dir: `app.session.working_dir` (`Option<String>`).
++- Tests live under `crates/jcode-tui/src/tui/app/tests/` (e.g. `command_suggestions_cache.rs`).
++- No `ignore`/`walkdir` crate in the TUI crates. `fd` is on PATH here, but do not depend on it (see Design).
++
++Gaps to fill: a file-candidate provider, an `@`-token parser, a second overlay state (the existing one
++is slash-only and `&'static str` descriptions), and the async/stale-result handling.
++
++## Design
++
++### Do not overload `command_suggestions()`
++
++Its type (`(String, &'static str)`), its per-frame memo, and its guards (`pending_login`, picker
++preview) are slash-specific. Add a parallel, small state instead:
++
++```text
++struct AtFileState {
++    token_range: (usize, usize),   // byte range of the @token in app.input
++    quoted: bool,
++    query: String,
++    items: Vec<AtFileItem>,        // { value, label, description, is_dir }
++    selected: usize,
++    request_id: u64,
++}
++App { at_file: Option<AtFileState>, at_file_task: Option<...> }
++```
++
++### Candidate provider: pure Rust, no `fd` dependency
++
++Add a new crate `crates/jcode-fuzzy-files` (or a module in `jcode-tui`) using the `ignore` crate
++(same walker as ripgrep: gitignore aware, hidden support, `follow_links`). Reasons: no runtime
++dependency on `fd`, no process spawn per keystroke, cancellable via an `AtomicBool`.
++Fallback is not needed. Trade-off: one new direct dependency, but `ignore` 0.4.25 is already in
++`Cargo.lock` (transitive, verified), so no new crate is downloaded. Versus shelling out to `fd`.
++Recommend `ignore`.
++
++Port exactly: the two-pass depth-1 then recursive merge, `scoreEntry` ranking, the sort tiebreakers,
++top 20, `.git` exclusion, scoped `~/` / absolute / relative bases, quoted `@"..."` handling.
++Pure functions, unit-testable without a terminal.
++
++### Async
++
++Run the walk on a blocking task, send results over the existing TUI event channel, drop stale results
++by `request_id` and by comparing the input snapshot (same rule as pi section 7). Debounce 20 ms for
++the typing path. Walk cap: `max_results` 100 per pass.
++
++### Keys
++
++Add `handle_at_file_key()` and call it right before `handle_command_suggestion_key` in
++`handle_key_core`. Active only when `at_file.is_some()`. Map: Up/Down (and Ctrl+J/K like slash),
++Tab and Enter accept, Esc close. This must **not** conflict with the user's remaps in
++`~/.jcode/config.toml` (`ctrl+alt+...`, `alt+...`). Plain Up/Down/Tab/Enter/Esc are not rebound there.
++Enter while the popup is open accepts and does not submit. Esc closes the popup before it clears input.
++
++### Rendering
++
++Reuse `command_suggestions_overlay_rect()` for placement (floats, no layout shift), and the same
++row styling. New `draw_at_file_overlay()` called next to `draw_command_suggestions_overlay()`.
++5 visible rows, selected row marker, dim description. Highlight matched chars with
++`jcode_fuzzy::fuzzy_match_positions` against the name (small nicety, not in pi, skip if it differs
++visibly from pi).
++Respect the repo's TUI rule: rows must not wrap, truncate with an ellipsis by display width.
++
++### Tab behavior
++
++Today Tab cycles slash suggestions. Add: when the cursor token is not a slash command and no
++popup is open, Tab forces path completion on that token (pi parity), one match applies at once.
++Keep slash behavior untouched.
++
++### Triggers and insertion
++
++In `insert_input_text_with_undo`, after the insert, run `maybe_open_at_file()` when the typed text is
++a single char in the trigger set or a token char. Skip when the insert came from paste. Reuse the
++existing `typed` flag. Pi's boundary regex becomes a small hand-written scanner over `app.input[..cursor]`.
++Use char boundaries (`next_char_boundary`) like the rest of the file.
++
++### Out of scope
++
++`#` provider trigger, `@file` CLI arguments, expansion on submit, image attach by `@`.
++
++## Phases
++
++1. **Spec tests first (no TUI).** New crate or module with `at_prefix`, `parse_path_prefix`,
++   `build_fd_path_query` equivalent, `score_entry`, `apply_completion`. Port pi's cases as table tests.
++   Gate: `cargo test -p <crate>` green. This is the whole behavioral spec, so do it first.
++2. **Provider.** `ignore`-based walker with cancel flag, two-pass merge, top 20. Tests on a temp tree:
++   gitignore respected, hidden included, `.git` excluded, symlinked dir followed, scoped `src/` base,
++   `~/` expansion.
++3. **State + keys.** `AtFileState`, open/close/update on typing, Up/Down/Tab/Enter/Esc,
++   Enter-accepts-not-submits, directory vs file suffix, undo snapshot. Tests alongside
++   `app/tests/` (mirror `command_suggestions_cache.rs`).
++4. **Render.** `draw_at_file_overlay()`, truncation by display width, flip above at the bottom.
++   Snapshot or buffer tests like `ui_input/status_tests.rs`.
++5. **Async + races.** Blocking task, request ids, stale drop, debounce. Test with a slow fake provider.
++6. **Tab force + polish.** Tab on non-slash tokens, single-match auto-apply, quoted `@"..."` flow,
++   paste cancels the popup.
++7. **Manual parity check** against pi in the same repo (see Verification).
++
++## Self-dev workflow (from the repo's AGENTS.md)
++
++- Source: a v0.99.1 tree exists at `~/.jcode/scratch/jsrc` (no git repo, no `target/`). Scratch is
++  not durable and has no history. **Clone the real repo into a stable place first**
++  (`git clone https://github.com/1jehuang/jcode ~/Code/Personal/jcode`, checkout the `v0.99.1` tag),
++  work on a branch, commit as you go. Then `diff -r` against the scratch copy once to confirm it is the
++  same tree.
++- AGENTS.md says to work on master and not branch unless needed. For a local fork that you will rebase
++  onto upstream releases, a branch `feat/at-file-picker` is the concrete reason, so keep it.
++- Build: `cargo build --profile selfdev` (28 cores, Rust 1.99, edition 2024, ~775 GB free).
++  No `mold`, `sccache` or `clang` installed. Link time will be the slow part. Installing `mold`
++  (dnf) is optional and would speed linking, not required.
++- **Test without disturbing your daemon:** run the build against its own socket:
++  `./target/selfdev/jcode run --no-update --socket /run/user/1000/jcode-atfile.sock '<prompt>'`.
++  A fresh binary is inert for real sessions until `jcode self-dev --build` repoints
++  `~/.jcode/builds/shared-server/jcode` and restarts the daemon. Do that last, not first.
++- `cargo build` alone proves nothing about behavior (AGENTS.md). The TUI needs a real pty check, below.
++- Throwaway diagnostics use `eprintln!`, not `crate::logging::info` (that goes to a file). Remove before commit.
++- Use your own git identity for commits, never an agent identity (AGENTS.md).
++
++## Verification
++
++Per phase: unit and table tests. End to end, in order:
++
++1. `cargo test -p jcode-tui at_file` and the new crate's tests.
++2. Headless sanity: `target/selfdev/jcode run --no-update --socket ...` still works (no regression).
++3. Real TUI in a pty (run in a herdr pane or `script`/`tmux` harness), repo = a scratch tree:
++   - type `@rea` shows `README.md` first (starts-with beats contains).
++   - `@src/` lists the dir contents, dirs first by score bonus.
++   - Tab on a dir keeps the popup flow (no trailing space), on a file adds a space.
++   - `@"my fi` quoted flow with spaces.
++   - Enter accepts and does not send. Esc closes. Esc again clears as before.
++   - `(@x`, `` `@x `` wrapper cases. `email@x.com` must NOT open the popup (no token boundary).
++   - Paste a path containing `@`: no popup.
++   - Slash commands unchanged, `/mod` + Tab unchanged.
++4. Side by side with pi in the same directory for 10 queries. Same top result and same order is the pass bar.
++5. herdr: confirm `alt+h` toggle, resume and the sidebar status still work, since they depend on the TUI.
++6. Only then `jcode self-dev --build` to repoint the shared daemon, and check `jcode --version` and that
++   existing sessions reconnect.
++
++## Risks and mitigations
++
++| Risk | Mitigation |
++| --- | --- |
++| Key conflicts (Tab, Enter, Esc, Up/Down) | Handler runs only while the popup is open. Run `/keys` (conflict report) after. |
++| Per-frame cost (suggestions are read up to 8x per frame) | Own state, no recompute in render. Render reads `at_file.items` only. |
++| Large repos (`~/Code/and/alpha`) | `ignore` walker with result cap and cancel flag. Never walk on the render thread. |
++| Race on fast typing | request id plus input snapshot compare, as in pi. |
++| `email@host`, `@mentions` in prose | token-boundary scanner, same as pi's regex. Test cases above. |
++| Local build drifts from upstream | Keep the change in one new crate plus small hooks (about 5 touch points) so rebases stay cheap. |
++| The installed binary gets replaced by an update | `jcode self-dev --build` output lives under `builds/versions/`. Auto-update may swap it, so keep `check_updates` in mind (`features.check_updates = true` today). |
++| Wide-char / CJK token boundaries | Port `autocompleteBoundaryRegex` semantics, test with CJK punctuation. |
++
++## Open decisions for you
++
++1. Branch from tag `v0.99.1`, or from current upstream master? Master may have moved the files above.
++2. Pure-Rust `ignore` walker (recommended) or shell out to `fd` for exact pi behavior? `fd` is already on
++   your PATH, but it adds a runtime dependency and a process per keystroke.
++3. Include the `#` trigger? Pi ships it for providers, but there is no jcode provider for it, so it would be empty.
++4. Upstream the change as a PR when done? jcode's CONTRIBUTING welcomes PRs, which would remove the
++   rebase burden. The change is self-contained, so it is a reasonable candidate.
++5. Highlight matched characters in rows (jcode already has the machinery) or match pi's plain rows?
++
++## Estimate
++
++Phases 1 to 2 are the bulk of the logic, but small and well-specified. 3 to 6 touch about five
++existing functions. I would expect a working version in one focused session, plus time for the
++real-pty parity check. The first full `cargo build --profile selfdev` of this workspace will be the
++longest single wait.
++
++## Corrections to my earlier answer
++
++- The "Attachment not found or not a file" string I quoted comes from the Gmail tool, not the TUI.
++  jcode's drag-and-drop file handling is in `tui/app/input/paste_guard.rs` and only attaches images.
++- jcode does not support `@file` completion today. Confirmed by reading the source, not just the binary.
+-- 
+2.56.0
+
