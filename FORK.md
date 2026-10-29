@@ -56,8 +56,9 @@ C2 conflict hints: the single hook is the first statement of
 registration per transport, add the project-tools call to each path that receives a
 session `working_dir`. `tool/project.rs` is new and cannot conflict.
 C3 verify: `cargo test -p jcode-tui --lib -- local_new remote_new` (3 tests: local
-`/new`, local `/new <name>`, remote sends `Clear` then `RenameSession`). Manual:
-`/new`, `/new my session`; check the new session id and `/resume` name.
+`/new`, local `/new <name>`, remote sends `Clear` then `RenameSession`). Runtime:
+tmux harness confirms `/new` changes the session title/id, `/new named session`
+sets the title, and `/resume` lists the named session.
 C3 conflict hints: the local handler sits beside `/clear` in
 `handle_session_command`; the remote handler sits beside `/clear` in
 `submit_remote_enter_input` and shares `reset_remote_view_for_new_session`. The
