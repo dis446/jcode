@@ -1,0 +1,37 @@
+From 9a7f878707c52db0b5fcf6a62829bb2995f17810 Mon Sep 17 00:00:00 2001
+From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
+Date: Thu, 29 Oct 2026 12:01:41 +0800
+Subject: [PATCH 4/4] fix(at-file): hook remote-mode key path and backspace
+ [C1]
+
+---
+ crates/jcode-tui/src/tui/app/remote/key_handling.rs | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/crates/jcode-tui/src/tui/app/remote/key_handling.rs b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
+index cc13736ef..1b2a097fc 100644
+--- a/crates/jcode-tui/src/tui/app/remote/key_handling.rs
++++ b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
+@@ -686,6 +686,11 @@ async fn handle_remote_key_internal(
+         }
+     }
+ 
++    // CUSTOM (C1): the @file popup owns Up/Down/Tab/Enter/Esc while visible.
++    if app.handle_at_file_key(code, modifiers) {
++        return Ok(());
++    }
++
+     if app.handle_command_suggestion_key(code, modifiers) {
+         return Ok(());
+     }
+@@ -969,6 +974,7 @@ async fn handle_remote_key_internal(
+                 app.cursor_pos = prev;
+                 app.reset_tab_completion();
+                 app.sync_model_picker_preview_from_input();
++                app.at_file_after_edit(); // CUSTOM (C1)
+             }
+         }
+         KeyCode::Delete => {
+-- 
+2.56.0
+
