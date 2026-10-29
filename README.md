@@ -46,5 +46,6 @@ Starts a fresh session in place, like pi's `/new`, and optionally names it:
 - `/new refactor auth` starts the session with the display name
   `refactor auth`, so it is easy to find in `/resume`.
 - The previous session is closed and saved as usual.
+- `/new` is refused while a turn is running. Press Esc or run `/cancel` first.
 
 Everything else in this repository is upstream code.
