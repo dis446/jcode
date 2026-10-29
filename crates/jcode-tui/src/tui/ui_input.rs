@@ -1,3 +1,6 @@
+#[path = "ui_input/at_file.rs"]
+mod at_file; // CUSTOM (C1)
+pub(super) use at_file::draw_at_file_overlay;
 #[path = "ui_input/command_suggestions.rs"]
 mod command_suggestions;
 use command_suggestions::*;

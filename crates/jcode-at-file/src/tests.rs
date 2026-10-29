@@ -203,3 +203,15 @@ fn walker_cancel_returns_quickly() {
     let cancel = AtomicBool::new(true);
     assert!(search(d.path(), "", &cancel).len() <= 1);
 }
+
+#[test]
+fn forced_token_has_no_at() {
+    let t = "open src/ma";
+    let p = extract_path_token(t, t.len()).unwrap();
+    assert_eq!((p.start, p.query.as_str(), p.at), (5, "src/ma", false));
+    let (out, cur) = apply_completion(t, t.len(), &p, &cand("src/main.rs"));
+    assert_eq!((out.as_str(), cur), ("open src/main.rs ", 17));
+    assert!(extract_path_token("open ", 5).is_none());
+    // An @ token keeps the @ form.
+    assert!(extract_path_token("x @a", 4).unwrap().at);
+}
