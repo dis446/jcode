@@ -453,6 +453,19 @@ pub(in crate::tui::app) fn handle_server_event(
         app.usage_reset.refresh_usage = true;
         return true;
     }
+    if let ServerEvent::Done { id } = &event
+        && app
+            .pending_remote_new_session
+            .as_ref()
+            .is_some_and(|pending| pending.clear_request_id == *id)
+    {
+        if let Some(pending) = app.pending_remote_new_session.as_mut() {
+            pending.clear_done = true;
+        }
+        // Control acknowledgement, not a turn: the followup pass finishes the
+        // reset and rename once both SessionId and Done have arrived.
+        return false;
+    }
 
     if let ServerEvent::Error { id, message, .. } = &event
         && app.usage_reset.invalidate_requests.remove(id).is_some()
@@ -1279,6 +1292,33 @@ pub(in crate::tui::app) fn handle_server_event(
             retry_after_secs,
             ..
         } => {
+            if app
+                .pending_remote_new_session
+                .as_ref()
+                .is_some_and(|pending| pending.clear_request_id == id)
+            {
+                // The daemon kept the previous session. Do not reset the view
+                // or send the rename, and do not run the turn-error recovery
+                // below (it would treat the busy hint as a rate limit).
+                app.pending_remote_new_session = None;
+                app.push_display_message(DisplayMessage::error(format!(
+                    "Cannot start a new session: {message}"
+                )));
+                app.set_status_notice("New session failed");
+                return false;
+            }
+            if app
+                .pending_new_session_rename
+                .as_ref()
+                .is_some_and(|pending| pending.request_id == id)
+            {
+                app.pending_new_session_rename = None;
+                app.push_display_message(DisplayMessage::error(format!(
+                    "Failed to name new session: {message}"
+                )));
+                app.set_status_notice("New session");
+                return false;
+            }
             if app.pending_agent_model_request_id == Some(id) {
                 app.pending_agent_model_request_id = None;
                 app.push_display_message(DisplayMessage::error(format!(
@@ -1581,6 +1621,9 @@ pub(in crate::tui::app) fn handle_server_event(
             false
         }
         ServerEvent::SessionId { session_id } => {
+            if let Some(pending) = app.pending_remote_new_session.as_mut() {
+                pending.confirmed_session_id = Some(session_id.clone());
+            }
             if app.remote_session_id.as_deref() != Some(session_id.as_str()) {
                 app.remote_available_service_tiers = None;
             }
@@ -1605,6 +1648,16 @@ pub(in crate::tui::app) fn handle_server_event(
             title,
             display_title,
         } => {
+            let quiet_new_session = app
+                .pending_new_session_rename
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.session_id.as_str() == session_id.as_str()
+                        && title.as_deref() == Some(pending.title.as_str())
+                });
+            if quiet_new_session {
+                app.pending_new_session_rename = None;
+            }
             crate::tui::session_picker::invalidate_session_list_cache();
             let active_session_id = app
                 .remote_session_id
@@ -1620,7 +1673,12 @@ pub(in crate::tui::app) fn handle_server_event(
                     app.session.title = Some(display_title.clone());
                 }
                 app.update_terminal_title();
-                if title.is_some() {
+                if quiet_new_session {
+                    // `/new` already announced the new session. Keep that
+                    // presentation instead of adding a second "Renamed..."
+                    // notice to the fresh transcript.
+                    app.set_status_notice(format!("New session: {display_title}"));
+                } else if title.is_some() {
                     app.push_display_message(DisplayMessage::system(format!(
                         "Renamed session to {}.",
                         display_title

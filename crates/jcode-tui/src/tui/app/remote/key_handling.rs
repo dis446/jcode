@@ -17,7 +17,7 @@ pub(in crate::tui::app) use update::{
 /// Drop every trace of the replaced conversation after the daemon created a
 /// fresh session (`/clear` and `/new`). Side panel pages and diagrams belong
 /// to the discarded transcript, so they must not survive the swap (#605).
-fn reset_remote_view_for_new_session(app: &mut App) {
+pub(super) fn reset_remote_view_for_new_session(app: &mut App) {
     app.clear_provider_messages();
     app.clear_display_messages();
     app.queued_messages.clear();
@@ -32,6 +32,14 @@ fn reset_remote_view_for_new_session(app: &mut App) {
     app.swarm_plan_version = None;
     app.swarm_plan_swarm_id = None;
     app_mod::commands_review::clear_side_panel_for_new_session(app);
+    // One-shot skill and improve selections belong to the discarded session.
+    // Remote turns forward `active_skill`, so leaving it set would silently
+    // inject the old skill into the first prompt of the new session.
+    app.active_skill = None;
+    app.improve_mode = None;
+    app.session.improve_mode = None;
+    app.provider_session_id = None;
+    app.session.provider_session_id = None;
     app.is_processing = false;
     app.status = ProcessingStatus::Idle;
 }
@@ -1847,18 +1855,27 @@ pub(in crate::tui::app) async fn submit_remote_enter_input(
                 ));
                 return Ok(());
             }
+            if app.pending_remote_new_session.is_some() {
+                app.push_display_message(DisplayMessage::error(
+                    "A new session is already starting.".to_string(),
+                ));
+                return Ok(());
+            }
             let name = trimmed.strip_prefix("/new").unwrap_or_default().trim();
             let name = (!name.is_empty()).then(|| name.to_string());
-            remote.clear().await?;
-            reset_remote_view_for_new_session(app);
-            if let Some(name) = name {
-                // Clear and rename travel on the same connection, so the
-                // daemon applies the name to the fresh session.
-                remote.rename_session(Some(name.clone())).await?;
-                app.set_status_notice(format!("New session: {name}"));
-            } else {
-                app.set_status_notice("New session");
-            }
+            let clear_request_id = remote.clear().await?;
+            // The server can reject Clear (for example while another client's
+            // turn holds the agent lock). Keep the old view and defer the
+            // rename until SessionId and Done prove the replacement exists.
+            app.pending_new_session_rename = None;
+            app.pending_remote_new_session =
+                Some(crate::tui::app::PendingRemoteNewSession {
+                    clear_request_id,
+                    name,
+                    clear_done: false,
+                    confirmed_session_id: None,
+                });
+            app.set_status_notice("Starting new session...");
             return Ok(());
         }
 

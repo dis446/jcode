@@ -177,6 +177,28 @@ struct PendingSplitPrompt {
     images: Vec<(String, String)>,
 }
 
+/// A remote `/new` waiting for the server to confirm that `Clear` created a
+/// fresh session. The client must not reset its view or send the optional
+/// rename until that confirmation arrives, because the server can reject the
+/// clear while the previous session is busy.
+#[derive(Debug, Clone)]
+struct PendingRemoteNewSession {
+    clear_request_id: u64,
+    name: Option<String>,
+    clear_done: bool,
+    confirmed_session_id: Option<String>,
+}
+
+/// The rename request sent for a confirmed remote `/new`. The matching
+/// `SessionRenamed` event updates the title without printing the normal
+/// "Renamed session to ..." notice, which would read as a second command.
+#[derive(Debug, Clone)]
+struct PendingNewSessionRename {
+    request_id: u64,
+    session_id: String,
+    title: String,
+}
+
 struct PendingLocalTransfer {
     receiver: mpsc::Receiver<anyhow::Result<PreparedTransferSession>>,
 }
@@ -1765,6 +1787,12 @@ pub struct App {
     pending_split_request: bool,
     // Ask the followup loop to issue a transfer request once idle.
     pending_transfer_request: bool,
+    // Remote `/new` sent Clear and is waiting for the server to confirm the
+    // replacement session before resetting the view or sending the rename.
+    pending_remote_new_session: Option<PendingRemoteNewSession>,
+    // The rename request for a confirmed remote `/new`, suppressed in the
+    // normal SessionRenamed presentation path.
+    pending_new_session_rename: Option<PendingNewSessionRename>,
     // Local transfer preparation currently running in the background.
     pending_local_transfer: Option<PendingLocalTransfer>,
     // Queue mode: if true, Enter during processing queues; if false, Enter queues to send next

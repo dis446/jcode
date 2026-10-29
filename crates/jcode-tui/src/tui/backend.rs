@@ -1000,13 +1000,15 @@ impl RemoteConnection {
         Ok(id)
     }
 
-    pub async fn rename_session(&mut self, title: Option<String>) -> Result<()> {
+    pub async fn rename_session(&mut self, title: Option<String>) -> Result<u64> {
+        let id = self.next_request_id;
         let request = Request::RenameSession {
-            id: self.next_request_id,
+            id,
             title,
         };
         self.next_request_id += 1;
-        self.send_request(request).await
+        self.send_request(request).await?;
+        Ok(id)
     }
 
     /// Inject externally transcribed text into the active remote TUI session.

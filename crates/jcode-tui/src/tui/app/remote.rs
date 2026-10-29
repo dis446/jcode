@@ -2,8 +2,9 @@
 
 use super::{
     App, DisplayMessage, MAX_TURN_HOLD_SECS, PendingReloadReconnectStatus, ProcessingStatus,
-    RemoteResumeActivity, SendAction, auth::auth_muse_helpers, ctrl_bracket_fallback_to_esc, input,
-    parse_rate_limit_error, remote_notifications::present_swarm_notification,
+    PendingNewSessionRename, RemoteResumeActivity, SendAction, auth::auth_muse_helpers,
+    ctrl_bracket_fallback_to_esc, input, parse_rate_limit_error,
+    remote_notifications::present_swarm_notification,
     spawn_in_new_terminal,
 };
 use crate::bus::BusEvent;
@@ -1101,6 +1102,11 @@ pub(super) fn handle_disconnect(
     reason: Option<RemoteDisconnectReason>,
 ) {
     app.revoke_cloud_environment();
+    // A `/new` whose Clear acknowledgement was lost cannot be completed on a
+    // fresh connection. Drop it so a stale pending rename can never target the
+    // session this client reconnects to.
+    app.pending_remote_new_session = None;
+    app.pending_new_session_rename = None;
     let detail = if state.server_reload_in_progress {
         "server reload in progress".to_string()
     } else if let Some(reason) = reason.as_ref() {
@@ -1382,6 +1388,7 @@ async fn dispatch_pending_server_reload(app: &mut App, remote: &mut RemoteConnec
 }
 
 pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteConnection) {
+    process_pending_remote_new_session(app, remote).await;
     if app.prepare_cloud_environment(remote).await.is_err() {
         app.revoke_cloud_environment();
         return;
@@ -1740,6 +1747,56 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
             if !combined.is_empty() {
                 app.hidden_queued_system_messages.insert(0, combined);
             }
+        }
+    }
+}
+
+/// Finish a remote `/new` once the server confirms that `Clear` produced a
+/// replacement session. The reset and rename are deliberately deferred until
+/// then, because a rejected clear must leave the old transcript and session
+/// name untouched.
+pub(super) async fn process_pending_remote_new_session(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+) {
+    if !app
+        .pending_remote_new_session
+        .as_ref()
+        .is_some_and(|pending| pending.clear_done)
+    {
+        return;
+    }
+    let Some(confirmed_session_id) = app
+        .pending_remote_new_session
+        .as_ref()
+        .and_then(|pending| pending.confirmed_session_id.clone())
+    else {
+        return;
+    };
+    let Some(pending) = app.pending_remote_new_session.take() else {
+        return;
+    };
+
+    key_handling::reset_remote_view_for_new_session(app);
+
+    let Some(name) = pending.name else {
+        app.set_status_notice("New session");
+        return;
+    };
+    match remote.rename_session(Some(name.clone())).await {
+        Ok(request_id) => {
+            app.pending_new_session_rename = Some(PendingNewSessionRename {
+                request_id,
+                session_id: confirmed_session_id,
+                title: name.clone(),
+            });
+            app.set_status_notice(format!("New session: {name}"));
+        }
+        Err(error) => {
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to name new session: {error}"
+            )));
+            app.set_status_notice("New session");
         }
     }
 }
