@@ -1,0 +1,19 @@
+[package]
+name = "jcode-at-file"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# CUSTOM (dis446 fork, ledger C1): `@file` composer completion. Pure logic plus
+# a gitignore-aware candidate walker. Kept out of jcode-tui so upstream rebases
+# only ever touch a handful of small hooks.
+
+[lib]
+name = "jcode_at_file"
+path = "src/lib.rs"
+
+[dependencies]
+ignore = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
