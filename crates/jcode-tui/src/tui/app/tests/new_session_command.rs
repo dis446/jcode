@@ -111,6 +111,62 @@ fn remote_new_clears_side_panel_pages() {
 }
 
 #[test]
+fn local_new_refuses_while_processing() {
+    let mut app = create_test_app();
+    let old_id = app.session.id.clone();
+    app.is_processing = true;
+
+    assert!(super::commands::handle_session_command(
+        &mut app,
+        "/new named"
+    ));
+
+    assert_eq!(app.session.id, old_id);
+    assert!(app.session.display_title().is_none());
+    assert!(
+        app.display_messages()
+            .last()
+            .is_some_and(|message| message.content.contains("while a turn is running"))
+    );
+}
+
+#[test]
+fn remote_new_refuses_while_processing() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let peer = remote
+        .take_dummy_peer()
+        .expect("dummy remote should retain peer stream");
+    let (reader, _writer) = peer.into_split();
+    let mut reader = BufReader::new(reader);
+    remote.mark_history_loaded();
+    app.is_remote = true;
+    app.is_processing = true;
+    app.input = "/new named".to_string();
+    app.cursor_pos = app.input.len();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+        .expect("remote /new should be handled locally");
+
+    assert!(
+        app.display_messages()
+            .last()
+            .is_some_and(|message| message.content.contains("while a turn is running"))
+    );
+    let sent = rt.block_on(async {
+        let mut line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            reader.read_line(&mut line),
+        )
+        .await
+    });
+    assert!(sent.is_err(), "busy /new must not send Clear or RenameSession");
+}
+
+#[test]
 fn remote_new_sends_clear_then_rename() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
