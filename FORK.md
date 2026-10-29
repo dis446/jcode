@@ -9,9 +9,9 @@ Custom work is deliberate and minimal. The default answer to a feature request
 is an existing upstream feature, an existing codebase primitive, or operator
 configuration, not new Rust. Adding Rust to the fork is a high bar.
 
-Everything about the fork lives **in this repo**: the ledger, the plans, the
-exported patches and the TUI regression suite. The dotfiles repo only holds the
-pin, the config and the install entry point.
+Everything about the fork lives **in this repo**: the ledger, the plans and the
+TUI regression suite. The dotfiles repo only holds the pin, the config and the
+install entry point.
 
 ## Rules
 
@@ -29,8 +29,10 @@ pin, the config and the install entry point.
 3. **`jcode update` is banned.** Upgrades follow the runbook below. In-app update
    checks are off (`~/dotfiles/jcode/config.toml`: `check_updates = false`), and
    `up` in the shell never touches jcode.
-4. **Every custom change is tracked** in the ledger below *before* it is merged,
-   with its patch exported to `patches/`. No untracked local divergence.
+4. **Every custom change is tracked** in the ledger below *before* it is merged.
+   Git history is the patch series; generate a diff with `git format-patch` only
+   when one is needed, and do not commit generated patch files. No untracked
+   local divergence.
 5. **Remotes:** `origin` = this fork, `upstream` = `1jehuang/jcode`. `master`
    carries our commits on top of upstream `master`, kept as a small, rebased
    series; no long-lived feature branches.
@@ -43,12 +45,12 @@ pin, the config and the install entry point.
 
 ## Ledger of custom work
 
-| ID | Title | Status | Base | Upstream files touched | Patch | Plan | Upstreamable |
-| -- | ----- | ------ | ---- | ---------------------- | ----- | ---- | ------------ |
-| C1 | Native `@file` picker (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [patches/](patches/) (`git format-patch upstream/master..HEAD`) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
-| C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tool-core`: `lib.rs` (`Tool::is_project_tool` default). `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir` + `_with_global`), `server/client_session.rs` (subscribe + two resume paths), `server/headless.rs`, `server.rs`, `server/worker_revive.rs`. Root `src/cli/commands.rs`. New: `tool/project.rs`, `docs/PROJECT_TOOLS.md`. Project registration is independent of MCP and runs after the fixed MCP tools at each session site. | [patches/](patches/) | [doc](docs/PROJECT_TOOLS.md) | yes (new module + thin hooks) |
-| C3 | `/new [name]` slash command (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.345-dev) | `jcode-tui`: `app.rs` (pending new-session state), `app/tui_lifecycle.rs` (2 inits), `app/commands.rs` (`handle_session_command`), `app/commands_review.rs` (`reset_current_session` keeps working dir, refreshes title/cache), `app/remote.rs` (deferred clear completion), `app/remote/key_handling.rs` (deferred `/new`, stale-state reset), `app/remote/server_events.rs` (Clear Done/Error and quiet rename), `app/state_ui_input_helpers.rs` (registry), `tui/backend.rs` (`rename_session` returns request id), `ui_overlays.rs` (help). New: `app/tests/new_session_command.rs` | [patches/](patches/) | n/a | yes (additive slash command) |
-| C4 | Live provider credit chip (DeepSeek/Moonshot balance) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.356-dev) | `jcode-base`: `usage.rs` (`mod balance;` + re-export), `usage/api_keys.rs` (`configured_key` becomes `pub(super)`; the DeepSeek/Moonshot balance fetch+parse bodies move into `usage/balance.rs`, and `/usage` calls the same functions the chip does). `jcode-config-types`: `display.rs` (`provider_balance`). `jcode-tui`: `tui/mod.rs` (module + `TuiState::provider_balance_chip`), `app.rs` (module + field), `app/tui_lifecycle.rs` (2 inits), `app/tui_state.rs`, `app/local.rs`, `app/remote.rs`, `ui_input.rs` (`draw_status` right-aligned chip). New: `jcode-base/src/usage/balance.rs`, `tui/provider_balance.rs`, `app/provider_balance.rs` | [patches/](patches/) | n/a | yes (new modules + thin hooks) |
+| ID | Title | Status | Base | Upstream files touched | Plan | Upstreamable |
+| -- | ----- | ------ | ---- | ---------------------- | ---- | ------------ |
+| C1 | Native `@file` picker (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
+| C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tool-core`: `lib.rs` (`Tool::is_project_tool` default). `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir` + `_with_global`), `server/client_session.rs` (subscribe + two resume paths), `server/headless.rs`, `server.rs`, `server/worker_revive.rs`. Root `src/cli/commands.rs`. New: `tool/project.rs`, `docs/PROJECT_TOOLS.md`. Project registration is independent of MCP and runs after the fixed MCP tools at each session site. | [doc](docs/PROJECT_TOOLS.md) | yes (new module + thin hooks) |
+| C3 | `/new [name]` slash command (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.345-dev) | `jcode-tui`: `app.rs` (pending new-session state), `app/tui_lifecycle.rs` (2 inits), `app/commands.rs` (`handle_session_command`), `app/commands_review.rs` (`reset_current_session` keeps working dir, refreshes title/cache), `app/remote.rs` (deferred clear completion), `app/remote/key_handling.rs` (deferred `/new`, stale-state reset), `app/remote/server_events.rs` (Clear Done/Error and quiet rename), `app/state_ui_input_helpers.rs` (registry), `tui/backend.rs` (`rename_session` returns request id), `ui_overlays.rs` (help). New: `app/tests/new_session_command.rs` | n/a | yes (additive slash command) |
+| C4 | Live provider credit chip (DeepSeek/Moonshot balance) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.356-dev) | `jcode-base`: `usage.rs` (`mod balance;` + re-export), `usage/api_keys.rs` (`configured_key` becomes `pub(super)`; the DeepSeek/Moonshot balance fetch+parse bodies move into `usage/balance.rs`, and `/usage` calls the same functions the chip does). `jcode-config-types`: `display.rs` (`provider_balance`). `jcode-tui`: `tui/mod.rs` (module + `TuiState::provider_balance_chip`), `app.rs` (module + field), `app/tui_lifecycle.rs` (2 inits), `app/tui_state.rs`, `app/local.rs`, `app/remote.rs`, `ui_input.rs` (`draw_status` right-aligned chip). New: `jcode-base/src/usage/balance.rs`, `tui/provider_balance.rs`, `app/provider_balance.rs` | n/a | yes (new modules + thin hooks) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
@@ -147,7 +149,7 @@ Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user
 extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
 `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.
 
-## Per-change entry (copy into the ledger and the patch header)
+## Per-change entry (copy into the ledger and the commit message)
 
 - The best-way check: which layer in `AGENTS.md` "Feature-request prudence" this
   change uses, and why the earlier layers do not fully work.
@@ -178,8 +180,8 @@ See `e2e/README.md`.
    `upstreamed`).
 3. Run `e2e/run.py --suite baseline` on the new stock binary, then build the fork
    and run `--suite all`. Run `cargo test --test e2e`.
-4. Re-export `patches/*.patch` (`git format-patch v<new>..HEAD`), update the
-   ledger Base column.
+4. Update the ledger Base column. If a diff is needed, generate it with
+   `git format-patch v<new>..HEAD`; do not commit it.
 5. Push `master`, then bump `~/dotfiles/jcode/UPSTREAM_VERSION` to the new base
    and run `~/dotfiles/scripts/jcode-install.sh` on each machine.
 6. Rollback: `~/dotfiles/scripts/jcode-install.sh --rollback-to <version>`; every
