@@ -1797,6 +1797,28 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         return true;
     }
 
+    if trimmed == "/new" || trimmed.starts_with("/new ") {
+        let name = trimmed.strip_prefix("/new").unwrap_or_default().trim();
+        let name = (!name.is_empty()).then(|| name.to_string());
+        reset_current_session(app);
+        if let Some(name) = name {
+            app.session.rename_title(Some(name.clone()));
+            if let Err(e) = app.session.save() {
+                app.push_display_message(DisplayMessage::error(format!(
+                    "Failed to name new session: {}",
+                    e
+                )));
+                return true;
+            }
+            crate::tui::session_picker::invalidate_session_list_cache();
+            app.update_terminal_title();
+            app.set_status_notice(format!("New session: {name}"));
+        } else {
+            app.set_status_notice("New session");
+        }
+        return true;
+    }
+
     if trimmed == "/clear" {
         reset_current_session(app);
         return true;
