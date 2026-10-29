@@ -352,6 +352,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  Session", section_style)));
     lines.push(Line::from(""));
+    lines.push(help_entry("/new", "Start a new session (optional name)"));
     lines.push(help_entry("/clear", "Clear conversation and start fresh"));
     lines.push(help_entry(
         "/compact",

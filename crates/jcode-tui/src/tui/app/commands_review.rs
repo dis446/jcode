@@ -328,7 +328,9 @@ pub(super) fn reset_current_session(app: &mut App) {
     app.clear_inline_image_state();
     app.active_skill = None;
     app.improve_mode = None;
+    let working_dir = app.session.working_dir.clone();
     let mut session = Session::create(None, None);
+    session.working_dir = working_dir;
     session.mark_active();
     session.model = Some(app.provider.model());
     session.provider_key = crate::session::derive_session_provider_key(app.provider.name());

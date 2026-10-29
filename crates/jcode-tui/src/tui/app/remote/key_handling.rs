@@ -14,6 +14,28 @@ pub(in crate::tui::app) use update::{
     handle_remote_char_input, handle_remote_update_command, send_interleave_now,
 };
 
+/// Drop every trace of the replaced conversation after the daemon created a
+/// fresh session (`/clear` and `/new`). Side panel pages and diagrams belong
+/// to the discarded transcript, so they must not survive the swap (#605).
+fn reset_remote_view_for_new_session(app: &mut App) {
+    app.clear_provider_messages();
+    app.clear_display_messages();
+    app.queued_messages.clear();
+    app.queued_commands.clear();
+    app.pasted_contents.clear();
+    app.pending_images.clear();
+    app.clear_inline_image_state();
+    app.clear_streaming_render_state();
+    app.clear_live_usage_state();
+    crate::tui::mermaid::clear_active_diagrams();
+    app.swarm_plan_items.clear();
+    app.swarm_plan_version = None;
+    app.swarm_plan_swarm_id = None;
+    app_mod::commands_review::clear_side_panel_for_new_session(app);
+    app.is_processing = false;
+    app.status = ProcessingStatus::Idle;
+}
+
 /// Step the remote session's speed tier (Standard -> Fast -> Ultrafast).
 async fn apply_remote_speed_direction(
     app: &mut App,
@@ -1817,27 +1839,25 @@ pub(in crate::tui::app) async fn submit_remote_enter_input(
             return Ok(());
         }
 
+        if trimmed == "/new" || trimmed.starts_with("/new ") {
+            let name = trimmed.strip_prefix("/new").unwrap_or_default().trim();
+            let name = (!name.is_empty()).then(|| name.to_string());
+            remote.clear().await?;
+            reset_remote_view_for_new_session(app);
+            if let Some(name) = name {
+                // Clear and rename travel on the same connection, so the
+                // daemon applies the name to the fresh session.
+                remote.rename_session(Some(name.clone())).await?;
+                app.set_status_notice(format!("New session: {name}"));
+            } else {
+                app.set_status_notice("New session");
+            }
+            return Ok(());
+        }
+
         if trimmed == "/clear" {
             remote.clear().await?;
-            app.clear_provider_messages();
-            app.clear_display_messages();
-            app.queued_messages.clear();
-            app.queued_commands.clear();
-            app.pasted_contents.clear();
-            app.pending_images.clear();
-            app.clear_inline_image_state();
-            app.clear_streaming_render_state();
-            app.clear_live_usage_state();
-            // Full transcript discard: diagrams and side panel pages
-            // are both orphaned (same rationale as
-            // reset_current_session; side panel is #605).
-            crate::tui::mermaid::clear_active_diagrams();
-            app.swarm_plan_items.clear();
-            app.swarm_plan_version = None;
-            app.swarm_plan_swarm_id = None;
-            super::super::commands_review::clear_side_panel_for_new_session(app);
-            app.is_processing = false;
-            app.status = ProcessingStatus::Idle;
+            reset_remote_view_for_new_session(app);
             app.set_status_notice("Session cleared");
             return Ok(());
         }
