@@ -1,0 +1,269 @@
+From 102e9d6274836e0af2707d67de77c6417e3c706e Mon Sep 17 00:00:00 2001
+From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
+Date: Thu, 29 Oct 2026 13:21:08 +0800
+Subject: [PATCH] feat(tui): add /new to start a named session in place
+
+---
+ crates/jcode-tui/src/tui/app/commands.rs      | 22 +++++
+ .../jcode-tui/src/tui/app/commands_review.rs  |  2 +
+ .../src/tui/app/remote/key_handling.rs        | 58 ++++++++-----
+ .../src/tui/app/state_ui_input_helpers.rs     |  1 +
+ crates/jcode-tui/src/tui/app/tests.rs         |  1 +
+ .../src/tui/app/tests/new_session_command.rs  | 83 +++++++++++++++++++
+ crates/jcode-tui/src/tui/ui_overlays.rs       |  1 +
+ 7 files changed, 149 insertions(+), 19 deletions(-)
+ create mode 100644 crates/jcode-tui/src/tui/app/tests/new_session_command.rs
+
+diff --git a/crates/jcode-tui/src/tui/app/commands.rs b/crates/jcode-tui/src/tui/app/commands.rs
+index 86c04aff0..365e9bcf3 100644
+--- a/crates/jcode-tui/src/tui/app/commands.rs
++++ b/crates/jcode-tui/src/tui/app/commands.rs
+@@ -1797,6 +1797,28 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
+         return true;
+     }
+ 
++    if trimmed == "/new" || trimmed.starts_with("/new ") {
++        let name = trimmed.strip_prefix("/new").unwrap_or_default().trim();
++        let name = (!name.is_empty()).then(|| name.to_string());
++        reset_current_session(app);
++        if let Some(name) = name {
++            app.session.rename_title(Some(name.clone()));
++            if let Err(e) = app.session.save() {
++                app.push_display_message(DisplayMessage::error(format!(
++                    "Failed to name new session: {}",
++                    e
++                )));
++                return true;
++            }
++            crate::tui::session_picker::invalidate_session_list_cache();
++            app.update_terminal_title();
++            app.set_status_notice(format!("New session: {name}"));
++        } else {
++            app.set_status_notice("New session");
++        }
++        return true;
++    }
++
+     if trimmed == "/clear" {
+         reset_current_session(app);
+         return true;
+diff --git a/crates/jcode-tui/src/tui/app/commands_review.rs b/crates/jcode-tui/src/tui/app/commands_review.rs
+index 2812726e8..4e9edb0b0 100644
+--- a/crates/jcode-tui/src/tui/app/commands_review.rs
++++ b/crates/jcode-tui/src/tui/app/commands_review.rs
+@@ -328,7 +328,9 @@ pub(super) fn reset_current_session(app: &mut App) {
+     app.clear_inline_image_state();
+     app.active_skill = None;
+     app.improve_mode = None;
++    let working_dir = app.session.working_dir.clone();
+     let mut session = Session::create(None, None);
++    session.working_dir = working_dir;
+     session.mark_active();
+     session.model = Some(app.provider.model());
+     session.provider_key = crate::session::derive_session_provider_key(app.provider.name());
+diff --git a/crates/jcode-tui/src/tui/app/remote/key_handling.rs b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
+index 565c1ecbc..5fa406b86 100644
+--- a/crates/jcode-tui/src/tui/app/remote/key_handling.rs
++++ b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
+@@ -14,6 +14,28 @@ pub(in crate::tui::app) use update::{
+     handle_remote_char_input, handle_remote_update_command, send_interleave_now,
+ };
+ 
++/// Drop every trace of the replaced conversation after the daemon created a
++/// fresh session (`/clear` and `/new`). Side panel pages and diagrams belong
++/// to the discarded transcript, so they must not survive the swap (#605).
++fn reset_remote_view_for_new_session(app: &mut App) {
++    app.clear_provider_messages();
++    app.clear_display_messages();
++    app.queued_messages.clear();
++    app.queued_commands.clear();
++    app.pasted_contents.clear();
++    app.pending_images.clear();
++    app.clear_inline_image_state();
++    app.clear_streaming_render_state();
++    app.clear_live_usage_state();
++    crate::tui::mermaid::clear_active_diagrams();
++    app.swarm_plan_items.clear();
++    app.swarm_plan_version = None;
++    app.swarm_plan_swarm_id = None;
++    app_mod::commands_review::clear_side_panel_for_new_session(app);
++    app.is_processing = false;
++    app.status = ProcessingStatus::Idle;
++}
++
+ /// Step the remote session's speed tier (Standard -> Fast -> Ultrafast).
+ async fn apply_remote_speed_direction(
+     app: &mut App,
+@@ -1817,27 +1839,25 @@ pub(in crate::tui::app) async fn submit_remote_enter_input(
+             return Ok(());
+         }
+ 
++        if trimmed == "/new" || trimmed.starts_with("/new ") {
++            let name = trimmed.strip_prefix("/new").unwrap_or_default().trim();
++            let name = (!name.is_empty()).then(|| name.to_string());
++            remote.clear().await?;
++            reset_remote_view_for_new_session(app);
++            if let Some(name) = name {
++                // Clear and rename travel on the same connection, so the
++                // daemon applies the name to the fresh session.
++                remote.rename_session(Some(name.clone())).await?;
++                app.set_status_notice(format!("New session: {name}"));
++            } else {
++                app.set_status_notice("New session");
++            }
++            return Ok(());
++        }
++
+         if trimmed == "/clear" {
+             remote.clear().await?;
+-            app.clear_provider_messages();
+-            app.clear_display_messages();
+-            app.queued_messages.clear();
+-            app.queued_commands.clear();
+-            app.pasted_contents.clear();
+-            app.pending_images.clear();
+-            app.clear_inline_image_state();
+-            app.clear_streaming_render_state();
+-            app.clear_live_usage_state();
+-            // Full transcript discard: diagrams and side panel pages
+-            // are both orphaned (same rationale as
+-            // reset_current_session; side panel is #605).
+-            crate::tui::mermaid::clear_active_diagrams();
+-            app.swarm_plan_items.clear();
+-            app.swarm_plan_version = None;
+-            app.swarm_plan_swarm_id = None;
+-            super::super::commands_review::clear_side_panel_for_new_session(app);
+-            app.is_processing = false;
+-            app.status = ProcessingStatus::Idle;
++            reset_remote_view_for_new_session(app);
+             app.set_status_notice("Session cleared");
+             return Ok(());
+         }
+diff --git a/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs b/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
+index 34c56fc47..f11afa443 100644
+--- a/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
++++ b/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
+@@ -129,6 +129,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
+     RegisteredCommand::hidden("/thinking", "Alias for /thinking-display"),
+     RegisteredCommand::hidden("/reasoning", "Alias for /thinking-display"),
+     RegisteredCommand::public("/cancel", "Cancel the current prompt or operation"),
++    RegisteredCommand::public("/new", "Start a new session (optional name)"),
+     RegisteredCommand::public("/clear", "Clear conversation history"),
+     RegisteredCommand::public("/cls", "Clear the view only, keeping context"),
+     RegisteredCommand::hidden("/clear-view", "Alias for /cls"),
+diff --git a/crates/jcode-tui/src/tui/app/tests.rs b/crates/jcode-tui/src/tui/app/tests.rs
+index 142ff825f..d843f7370 100644
+--- a/crates/jcode-tui/src/tui/app/tests.rs
++++ b/crates/jcode-tui/src/tui/app/tests.rs
+@@ -1930,6 +1930,7 @@ fn oversized_pasted_submit_is_rejected_and_preserves_input() {
+ }
+ 
+ include!("tests/clear_runtime_state.rs");
++include!("tests/new_session_command.rs");
+ 
+ include!("tests/kv_cache_provider_identity.rs");
+ 
+diff --git a/crates/jcode-tui/src/tui/app/tests/new_session_command.rs b/crates/jcode-tui/src/tui/app/tests/new_session_command.rs
+new file mode 100644
+index 000000000..c8e7ab26e
+--- /dev/null
++++ b/crates/jcode-tui/src/tui/app/tests/new_session_command.rs
+@@ -0,0 +1,83 @@
++// `/new` starts a fresh session in place, optionally named (pi parity).
++
++use tokio::io::{AsyncBufReadExt, BufReader};
++
++#[test]
++fn local_new_starts_fresh_session_with_name() {
++    let mut app = create_test_app();
++    let old_id = app.session.id.clone();
++    app.session.working_dir = Some("/tmp/new-session-work".to_string());
++
++    assert!(super::commands::handle_session_command(
++        &mut app,
++        "/new My Session"
++    ));
++
++    assert_ne!(app.session.id, old_id);
++    assert_eq!(app.session.display_title(), Some("My Session"));
++    assert_eq!(
++        app.session.working_dir.as_deref(),
++        Some("/tmp/new-session-work")
++    );
++}
++
++#[test]
++fn local_new_without_name_leaves_session_unnamed() {
++    let mut app = create_test_app();
++    let old_id = app.session.id.clone();
++    app.session.rename_title(Some("old name".to_string()));
++
++    assert!(super::commands::handle_session_command(&mut app, "/new"));
++
++    assert_ne!(app.session.id, old_id);
++    assert_eq!(app.session.display_title(), None);
++}
++
++#[test]
++fn remote_new_sends_clear_then_rename() {
++    let mut app = create_test_app();
++    let rt = tokio::runtime::Runtime::new().unwrap();
++    let _guard = rt.enter();
++    let mut remote = crate::tui::backend::RemoteConnection::dummy();
++    let peer = remote
++        .take_dummy_peer()
++        .expect("dummy remote should retain peer stream");
++    let (reader, _writer) = peer.into_split();
++    let mut reader = BufReader::new(reader);
++    remote.mark_history_loaded();
++    app.is_remote = true;
++    app.input = "/new My Session".to_string();
++    app.cursor_pos = app.input.len();
++
++    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
++        .expect("remote /new should succeed");
++
++    let first = rt
++        .block_on(async {
++            let mut line = String::new();
++            reader.read_line(&mut line).await?;
++            Ok::<_, std::io::Error>(line)
++        })
++        .expect("clear request should be readable");
++    let second = rt
++        .block_on(async {
++            let mut line = String::new();
++            reader.read_line(&mut line).await?;
++            Ok::<_, std::io::Error>(line)
++        })
++        .expect("rename request should be readable");
++
++    assert!(matches!(
++        serde_json::from_str::<crate::protocol::Request>(&first)
++            .expect("clear request should deserialize"),
++        crate::protocol::Request::Clear { .. }
++    ));
++    match serde_json::from_str::<crate::protocol::Request>(&second)
++        .expect("rename request should deserialize")
++    {
++        crate::protocol::Request::RenameSession { title, .. } => {
++            assert_eq!(title.as_deref(), Some("My Session"));
++        }
++        other => panic!("expected RenameSession, got {other:?}"),
++    }
++}
+diff --git a/crates/jcode-tui/src/tui/ui_overlays.rs b/crates/jcode-tui/src/tui/ui_overlays.rs
+index 1cb717252..b25c9da4d 100644
+--- a/crates/jcode-tui/src/tui/ui_overlays.rs
++++ b/crates/jcode-tui/src/tui/ui_overlays.rs
+@@ -352,6 +352,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
+ 
+     lines.push(Line::from(Span::styled("  Session", section_style)));
+     lines.push(Line::from(""));
++    lines.push(help_entry("/new", "Start a new session (optional name)"));
+     lines.push(help_entry("/clear", "Clear conversation and start fresh"));
+     lines.push(help_entry(
+         "/compact",
+-- 
+2.56.0
+
