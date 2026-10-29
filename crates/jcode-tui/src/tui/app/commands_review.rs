@@ -340,6 +340,10 @@ pub(super) fn reset_current_session(app: &mut App) {
     app.session = session;
     clear_side_panel_for_new_session(app);
     app.provider_session_id = None;
+    // The session id (and any name) changed, so both the terminal title and
+    // the /resume cache are stale even when `/new` was called without a name.
+    crate::tui::session_picker::invalidate_session_list_cache();
+    app.update_terminal_title();
 }
 
 fn observe_status_message(app: &App) -> String {
