@@ -1,3 +1,77 @@
+use serde::{Deserialize, Serialize};
+
+/// One authored choice on a question node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionOption {
+    /// Stable value returned to the model.
+    pub value: String,
+    /// Human-readable label shown in the dialog.
+    pub label: String,
+    /// Optional one-line explanation shown beside the label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Question node to ask after this option is chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+/// One node in a branching questionnaire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionNode {
+    /// Stable id used by `root` and `next` edges.
+    pub id: String,
+    /// Optional short label for breadcrumbs and review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// The question text.
+    pub question: String,
+    /// Authored choices. There is no maximum.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<QuestionOption>,
+    /// Whether the user may select more than one option.
+    #[serde(default)]
+    pub multi_select: bool,
+    /// Whether the user may type a custom answer. On by default.
+    #[serde(default = "default_allow_custom")]
+    pub allow_custom: bool,
+    /// Question node to ask after this node when the chosen option has no
+    /// `next`, or when a custom answer is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+fn default_allow_custom() -> bool {
+    true
+}
+
+/// One answer recorded by the dialog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionAnswer {
+    pub question_id: String,
+    /// Selected option values, empty for a custom-only answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected: Vec<String>,
+    /// Typed answer, when the user chose the custom row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<String>,
+}
+
+/// Final result of a questionnaire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum UserQuestionResult {
+    Answered {
+        answers: Vec<QuestionAnswer>,
+    },
+    Cancelled {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
     pub output: String,

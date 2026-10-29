@@ -1,6 +1,7 @@
 //! Events emitted by the daemon wire protocol.
 
 use super::*;
+use jcode_tool_types::QuestionNode;
 
 /// Credential-free usage attributed to an OAuth account on the daemon host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1027,5 +1028,20 @@ pub enum ServerEvent {
         is_password: bool,
         /// Tool call ID this is associated with
         tool_call_id: String,
+    },
+
+    /// A tool is waiting for the user to answer a branching questionnaire.
+    #[serde(rename = "user_question_request")]
+    UserQuestionRequest {
+        /// Unique request ID for matching the response
+        request_id: String,
+        /// Tool call ID this is associated with
+        tool_call_id: String,
+        /// Short label supplied by the tool call
+        intent: String,
+        /// Id of the first question node
+        root: String,
+        /// Every question node in the tree. There is no maximum.
+        questions: Vec<QuestionNode>,
     },
 }

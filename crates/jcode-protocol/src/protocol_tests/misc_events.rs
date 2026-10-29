@@ -401,6 +401,7 @@ fn test_subscribe_request_roundtrip_preserves_session_takeover_flags() -> Result
         system_prompt: None,
         supports_pdf_panels: true,
         supports_user_response: true,
+        supports_user_question: false,
         supports_server_failover: false,
         id: 89,
         working_dir: Some("/tmp/project".to_string()),
@@ -421,6 +422,7 @@ fn test_subscribe_request_roundtrip_preserves_session_takeover_flags() -> Result
         system_prompt: _,
         supports_pdf_panels,
         supports_user_response,
+        supports_user_question: _,
         supports_server_failover: _,
         id,
         working_dir,
@@ -463,6 +465,7 @@ fn test_subscribe_request_defaults_optional_flags() -> Result<()> {
         system_prompt: _,
         supports_pdf_panels,
         supports_user_response,
+        supports_user_question: _,
         supports_server_failover: _,
         id,
         working_dir,
@@ -746,5 +749,75 @@ fn context_cap_wire_roundtrip() -> Result<()> {
             }
         ));
     }
+    Ok(())
+}
+
+#[test]
+fn user_question_request_and_response_roundtrip() -> Result<()> {
+    let question = jcode_tool_types::QuestionNode {
+        id: "task".into(),
+        header: Some("Task".into()),
+        question: "Which task?".into(),
+        options: vec![jcode_tool_types::QuestionOption {
+            value: "bug".into(),
+            label: "Bug fix".into(),
+            description: Some("Fix a defect".into()),
+            next: None,
+        }],
+        multi_select: false,
+        allow_custom: true,
+        next: None,
+    };
+    let event = ServerEvent::UserQuestionRequest {
+        request_id: "ask-call-1".into(),
+        tool_call_id: "call".into(),
+        intent: "Choose".into(),
+        root: "task".into(),
+        questions: vec![question.clone()],
+    };
+    let json = encode_event(&event);
+    assert!(json.contains("\"type\":\"user_question_request\""));
+    let ServerEvent::UserQuestionRequest {
+        request_id,
+        tool_call_id,
+        intent,
+        root,
+        questions,
+    } = parse_event_json(json.trim())?
+    else {
+        return Err(anyhow!("expected UserQuestionRequest"));
+    };
+    assert_eq!(request_id, "ask-call-1");
+    assert_eq!(tool_call_id, "call");
+    assert_eq!(intent, "Choose");
+    assert_eq!(root, "task");
+    assert_eq!(questions, vec![question]);
+
+    let response = Request::UserQuestionResponse {
+        id: 12,
+        request_id: "ask-call-1".into(),
+        result: jcode_tool_types::UserQuestionResult::Answered {
+            answers: vec![jcode_tool_types::QuestionAnswer {
+                question_id: "task".into(),
+                selected: vec!["bug".into()],
+                custom: None,
+            }],
+        },
+    };
+    let json = serde_json::to_string(&response)?;
+    assert!(json.contains("\"type\":\"user_question_response\""));
+    let Request::UserQuestionResponse {
+        request_id,
+        result,
+        ..
+    } = parse_request_json(&json)?
+    else {
+        return Err(anyhow!("expected UserQuestionResponse"));
+    };
+    assert_eq!(request_id, "ask-call-1");
+    assert!(matches!(
+        result,
+        jcode_tool_types::UserQuestionResult::Answered { answers } if answers.len() == 1
+    ));
     Ok(())
 }

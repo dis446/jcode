@@ -3693,6 +3693,7 @@ dependencies = [
  "jcode-selfdev-types",
  "jcode-session-types",
  "jcode-side-panel-types",
+ "jcode-tool-types",
  "rand 0.9.3",
  "serde",
  "serde_json",
@@ -4244,6 +4245,7 @@ dependencies = [
 name = "jcode-tool-types"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
 ]
 

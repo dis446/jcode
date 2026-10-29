@@ -851,6 +851,7 @@ fn subscribe_request(working_dir: Option<&str>) -> Request {
         system_prompt: None,
         supports_pdf_panels: false,
         supports_user_response: false,
+        supports_user_question: false,
         supports_server_failover: false,
         id: 1,
         working_dir: working_dir.map(str::to_string),

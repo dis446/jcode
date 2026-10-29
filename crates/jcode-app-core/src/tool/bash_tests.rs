@@ -1,9 +1,9 @@
 use super::*;
 use crate::bus::{BackgroundTaskProgressSource, BackgroundTaskStatus};
-use crate::tool::StdinInputRequest;
 use crate::tool::bash::{
     BashTool, ProgressLineUpdate, parse_heuristic_progress, parse_progress_line,
 };
+use crate::tool::{InteractiveInputRequest, InteractiveInputResponse};
 use serde_json::json;
 use tokio::sync::mpsc;
 
@@ -308,7 +308,7 @@ async fn background_command_stdin_is_null() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "eof");
 }
 
-fn make_ctx(stdin_tx: Option<mpsc::UnboundedSender<StdinInputRequest>>) -> ToolContext {
+fn make_ctx(stdin_tx: Option<mpsc::UnboundedSender<InteractiveInputRequest>>) -> ToolContext {
     ToolContext {
         session_id: "test-session".to_string(),
         message_id: "test-msg".to_string(),
@@ -457,7 +457,7 @@ async fn test_basic_command_with_unused_stdin_channel() {
 
 #[tokio::test]
 async fn test_stdin_forwarding_single_line() {
-    let (tx, mut rx) = mpsc::unbounded_channel::<StdinInputRequest>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<InteractiveInputRequest>();
     let tool = BashTool::new();
 
     // "head -n1" reads one line from stdin and prints it
@@ -477,7 +477,11 @@ async fn test_stdin_forwarding_single_line() {
     assert!(!req.is_password);
 
     // Send the response
-    req.response_tx.send("test_input_line".to_string()).unwrap();
+    req.response_tx
+        .send(InteractiveInputResponse::Text(
+            "test_input_line".to_string(),
+        ))
+        .unwrap();
 
     // Wait for tool to finish
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), tool_handle)
@@ -495,7 +499,7 @@ async fn test_stdin_forwarding_single_line() {
 
 #[tokio::test]
 async fn test_stdin_forwarding_multiple_lines() {
-    let (tx, mut rx) = mpsc::unbounded_channel::<StdinInputRequest>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<InteractiveInputRequest>();
     let tool = BashTool::new();
 
     // "head -n2" reads two lines
@@ -514,7 +518,9 @@ async fn test_stdin_forwarding_multiple_lines() {
         "first request should end with -1: {}",
         req1.request_id
     );
-    req1.response_tx.send("line_one".to_string()).unwrap();
+    req1.response_tx
+        .send(InteractiveInputResponse::Text("line_one".to_string()))
+        .unwrap();
 
     // Second line
     let req2 = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
@@ -526,7 +532,9 @@ async fn test_stdin_forwarding_multiple_lines() {
         "second request should end with -2: {}",
         req2.request_id
     );
-    req2.response_tx.send("line_two".to_string()).unwrap();
+    req2.response_tx
+        .send(InteractiveInputResponse::Text("line_two".to_string()))
+        .unwrap();
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), tool_handle)
         .await
@@ -548,7 +556,7 @@ async fn test_stdin_forwarding_multiple_lines() {
 
 #[tokio::test]
 async fn test_stdin_not_triggered_for_non_blocking_command() {
-    let (tx, mut rx) = mpsc::unbounded_channel::<StdinInputRequest>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<InteractiveInputRequest>();
     let tool = BashTool::new();
 
     // This command doesn't read stdin at all
@@ -567,7 +575,7 @@ async fn test_stdin_not_triggered_for_non_blocking_command() {
 
 #[tokio::test]
 async fn test_command_timeout_with_stdin_channel() {
-    let (tx, _rx) = mpsc::unbounded_channel::<StdinInputRequest>();
+    let (tx, _rx) = mpsc::unbounded_channel::<InteractiveInputRequest>();
     let tool = BashTool::new();
 
     // `cat` blocks forever on stdin. With a short timeout and no stdin response,
@@ -793,7 +801,7 @@ async fn test_reload_persistable_bash_timeout_promotes_to_background() {
 
 #[tokio::test]
 async fn test_stderr_captured_with_stdin() {
-    let (tx, _rx) = mpsc::unbounded_channel::<StdinInputRequest>();
+    let (tx, _rx) = mpsc::unbounded_channel::<InteractiveInputRequest>();
     let tool = BashTool::new();
 
     let input = json!({"command": "echo stderr_msg >&2", "timeout": 5000});
@@ -810,7 +818,7 @@ async fn test_stderr_captured_with_stdin() {
 #[tokio::test]
 async fn unanswered_stdin_request_closes_stdin_instead_of_hanging() {
     // Client receives the request but never answers, like the TUI does.
-    let (tx, mut rx) = mpsc::unbounded_channel::<StdinInputRequest>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<InteractiveInputRequest>();
     let held = tokio::spawn(async move {
         let mut pending = Vec::new();
         while let Some(req) = rx.recv().await {

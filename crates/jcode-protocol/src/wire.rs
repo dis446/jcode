@@ -1,4 +1,5 @@
 use super::*;
+use jcode_tool_types::UserQuestionResult;
 
 /// Serde default for boolean fields that should default to `true` when absent,
 /// so older clients that omit the field keep their previous (unconditional)
@@ -151,6 +152,9 @@ pub enum Request {
         /// Desktop can render user_response tool calls as inline answers.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         supports_user_response: bool,
+        /// Client can render an interactive question dialog.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        supports_user_question: bool,
         /// The client has no account-router countdown of its own (Desktop,
         /// SDK). On a usage/rate-limit failure the server switches to the next
         /// pool-approved account and retries the turn itself.
@@ -533,6 +537,16 @@ pub enum Request {
         request_id: String,
         /// The user's input (line of text)
         input: String,
+    },
+
+    /// Resolve an outstanding `UserQuestionRequest`
+    #[serde(rename = "user_question_response")]
+    UserQuestionResponse {
+        id: u64,
+        /// Matches the request_id from UserQuestionRequest
+        request_id: String,
+        /// Answers or a cancellation
+        result: UserQuestionResult,
     },
 
     // === Agent-to-agent communication ===
