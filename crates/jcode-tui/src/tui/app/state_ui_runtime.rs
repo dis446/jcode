@@ -26,6 +26,63 @@ impl App {
         ))
     }
 
+    /// Project-defined slash commands for the session's current working dir.
+    ///
+    /// Loaded on first use (session attach) and reloaded when the working dir
+    /// changes. Nothing is executed here. A project entry that collides with a
+    /// built-in command is dropped with a warning: built-ins always win.
+    pub(crate) fn project_commands(
+        &self,
+    ) -> std::sync::Arc<Vec<crate::command::project::ProjectCommand>> {
+        let working_dir = self
+            .session
+            .working_dir
+            .as_deref()
+            .map(std::path::PathBuf::from);
+        if let Some(cache) = self.project_commands_cache.borrow().as_ref()
+            && cache.working_dir == working_dir
+        {
+            return std::sync::Arc::clone(&cache.commands);
+        }
+
+        let mut commands = crate::command::project::load_commands(working_dir.as_deref());
+        let builtins: Vec<&str> = super::registered_command_names().collect();
+        commands.retain(|command| {
+            let slash = format!("/{}", command.name());
+            if builtins.contains(&slash.as_str()) {
+                crate::logging::warn(&format!(
+                    "project commands: '{slash}' is a built-in jcode command; ignoring the project entry"
+                ));
+                false
+            } else {
+                true
+            }
+        });
+        let commands = std::sync::Arc::new(commands);
+        *self.project_commands_cache.borrow_mut() = Some(super::ProjectCommandCache {
+            working_dir,
+            commands: std::sync::Arc::clone(&commands),
+        });
+        // A switch to another project changes the command list and its
+        // descriptions, so the palette must rebuild.
+        self.invalidate_command_candidates_cache();
+        commands
+    }
+
+    /// Every slash-command name the composer should recognise: built-ins plus
+    /// the project's commands.
+    pub(crate) fn known_command_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = super::registered_command_names()
+            .map(str::to_string)
+            .collect();
+        names.extend(
+            self.project_commands()
+                .iter()
+                .map(|command| format!("/{}", command.name())),
+        );
+        names
+    }
+
     /// Re-read skills from disk for the active session working directory and
     /// sync the TUI-side registry snapshot.
     ///

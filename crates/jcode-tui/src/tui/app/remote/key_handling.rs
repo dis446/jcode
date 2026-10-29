@@ -349,6 +349,13 @@ pub(in crate::tui::app) async fn submit_prepared_remote_enter_input(
         }
         let trimmed = prepared.expanded.trim();
 
+        // Project commands run before the SSH gate and before skill
+        // resolution: their name is authoritative, and an SSH client only
+        // refuses them (it must not fall through to a model turn).
+        if app_mod::commands_project::handle_remote(app, remote, trimmed).await? {
+            return Ok(());
+        }
+
         // Before the SSH gate: `/local` must work from a client attached
         // to the cloud copy, because the return is coordinated locally.
         if app_mod::commands_cloud::parse_cloud_command(trimmed).is_some() {
