@@ -35,6 +35,7 @@ pin, the config and the install entry point.
 | -- | ----- | ------ | ---- | ---------------------- | ----- | ---- | ------------ |
 | C1 | Native `@file` picker (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [patches/](patches/) (`git format-patch upstream/master..HEAD`) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
 | C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir`, one call at the top of `register_mcp_tools_for_dir`). New: `tool/project.rs`, `docs/PROJECT_TOOLS.md` | [patches/](patches/) | [doc](docs/PROJECT_TOOLS.md) | yes (new module + 2 thin hooks) |
+| C3 | `/new [name]` slash command (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.345-dev) | `jcode-tui`: `app/commands.rs` (`handle_session_command`), `app/commands_review.rs` (`reset_current_session` keeps working dir), `app/remote/key_handling.rs` (shared reset helper + `/new`), `app/state_ui_input_helpers.rs` (registry), `ui_overlays.rs` (help). New: `app/tests/new_session_command.rs` | [patches/](patches/) | n/a | yes (additive slash command) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
@@ -54,6 +55,13 @@ C2 conflict hints: the single hook is the first statement of
 `Registry::register_mcp_tools_for_dir` in `tool/mod.rs`; if upstream splits MCP
 registration per transport, add the project-tools call to each path that receives a
 session `working_dir`. `tool/project.rs` is new and cannot conflict.
+C3 verify: `cargo test -p jcode-tui --lib -- local_new remote_new` (3 tests: local
+`/new`, local `/new <name>`, remote sends `Clear` then `RenameSession`). Manual:
+`/new`, `/new my session`; check the new session id and `/resume` name.
+C3 conflict hints: the local handler sits beside `/clear` in
+`handle_session_command`; the remote handler sits beside `/clear` in
+`submit_remote_enter_input` and shares `reset_remote_view_for_new_session`. The
+registry and help entries are one line each.
 Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
 extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
 `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.
