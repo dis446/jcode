@@ -827,6 +827,10 @@ impl crate::tui::TuiState for App {
         self.justrust_status.row()
     }
 
+    fn provider_balance_chip(&self) -> Option<&crate::tui::provider_balance::Chip> {
+        self.provider_balance.chip()
+    }
+
     fn background_task_rows(&self) -> &[crate::tui::BackgroundTaskRow] {
         self.background_task_rows_ref()
     }

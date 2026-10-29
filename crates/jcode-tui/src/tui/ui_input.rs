@@ -825,7 +825,55 @@ fn live_status_snapshot(app: &dyn TuiState, elapsed: f32) -> crate::protocol::Sw
 }
 
 pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pending_count: usize) {
-    stable_status::draw_status(frame, app, area, pending_count);
+    // CUSTOM (C4): reserve the right edge for the provider credit chip, then
+    // let upstream's stable status row lay out in the remaining width.
+    let chip = provider_balance_chip_line(app.provider_balance_chip(), area);
+    let status_area = match &chip {
+        Some((_, width)) => Rect {
+            width: area.width - width - 2,
+            ..area
+        },
+        None => area,
+    };
+    stable_status::draw_status(frame, app, status_area, pending_count);
+    if let Some((line, width)) = chip {
+        let rect = Rect {
+            x: area.x + area.width - width - 1,
+            y: area.y,
+            width,
+            height: 1,
+        };
+        frame.render_widget(Paragraph::new(line), rect);
+    }
+}
+
+/// Narrowest status row the chip may leave for upstream's stable status.
+const PROVIDER_BALANCE_MIN_STATUS_WIDTH: u16 = 40;
+
+/// Right-aligned provider credit chip. Dropped (never truncated) when the
+/// frame cannot also keep a usable status row on its left.
+fn provider_balance_chip_line(
+    chip: Option<&crate::tui::provider_balance::Chip>,
+    area: Rect,
+) -> Option<(Line<'static>, u16)> {
+    let chip = chip?;
+    if area.height == 0 || area.width < 12 {
+        return None;
+    }
+    let color = if chip.exhausted {
+        rgb(255, 100, 100)
+    } else if chip.low {
+        rgb(255, 193, 7)
+    } else {
+        dim_color()
+    };
+    let line = Line::from(Span::styled(chip.label.clone(), Style::default().fg(color)));
+    let width = line.width() as u16;
+    // One blank cell on each side of the chip.
+    if PROVIDER_BALANCE_MIN_STATUS_WIDTH.saturating_add(width).saturating_add(2) > area.width {
+        return None;
+    }
+    Some((line, width))
 }
 
 fn running_tool_header_spans(
