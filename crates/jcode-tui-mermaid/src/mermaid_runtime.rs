@@ -108,6 +108,40 @@ fn zellij_kitty_images_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// Herdr renders Kitty graphics itself and masks the outer terminal's
+/// identity, so an environment miss there means "unknown", not "no images".
+/// Set `JCODE_HERDR_KITTY_IMAGES=0` when Herdr's `terminal.kitty_graphics` is
+/// disabled or its renderer misbehaves in this terminal.
+fn herdr_kitty_images_enabled() -> bool {
+    std::env::var("JCODE_HERDR_KITTY_IMAGES")
+        .ok()
+        .as_deref()
+        .and_then(parse_env_bool)
+        .unwrap_or(true)
+}
+
+/// Protocol to assume when the fast env path cannot identify the outer
+/// terminal. Only Herdr is promoted: it implements Kitty graphics for child
+/// applications (`terminal.kitty_graphics`, on by default since 0.9.5) while
+/// rewriting `TERM` to `xterm-256color`, stripping `KITTY_WINDOW_ID`, and
+/// exporting `TERM_PROGRAM=herdr`.
+pub(super) fn fast_path_assumed_protocol(
+    mode: PickerInitMode,
+    env_protocol: Option<ProtocolType>,
+    multiplexer: Multiplexer,
+    herdr_kitty_enabled: bool,
+) -> Option<ProtocolType> {
+    if mode == PickerInitMode::Fast
+        && env_protocol.is_none()
+        && multiplexer == Multiplexer::Herdr
+        && herdr_kitty_enabled
+    {
+        Some(ProtocolType::Kitty)
+    } else {
+        None
+    }
+}
+
 pub(super) fn use_classic_kitty() -> bool {
     #[cfg(test)]
     {
@@ -472,6 +506,18 @@ pub fn init_picker() {
             PickerInitMode::Fast => fast_picker(),
             PickerInitMode::Probe => probe_picker(),
         };
+        if let Some(assumed) = fast_path_assumed_protocol(
+            mode,
+            env_protocol,
+            multiplexer,
+            herdr_kitty_images_enabled(),
+        ) {
+            crate::log_info(
+                "Herdr masks the outer terminal identity; assuming Kitty graphics \
+                 (JCODE_HERDR_KITTY_IMAGES=0 to opt out)",
+            );
+            picker.set_protocol_type(assumed);
+        }
         apply_multiplexer_protocol_limits(&mut picker, multiplexer);
         Some(picker)
     });

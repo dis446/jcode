@@ -13,7 +13,7 @@ Inside a Herdr pane, the TUI also reports `idle`/`working`, the session id, and 
 Jcode already:
 
 - forwards `HERDR_ENV`, `HERDR_SOCKET_PATH`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, `HERDR_BIN_PATH`, `HERDR_SESSION`, and `HERDR_AGENT` from the requesting client to server-side spawn and focus paths;
-- recognizes Herdr as a masking terminal multiplexer for Mermaid graphics capability detection;
+- recognizes Herdr as a masking terminal multiplexer for Mermaid graphics capability detection, and assumes Herdr's own Kitty graphics support when the outer terminal identity is masked (`JCODE_HERDR_KITTY_IMAGES=0` opts out);
 - exports stable lifecycle observer hooks for `session_start`, `session_end`, `turn_start`, and `turn_end`;
 - exports `JCODE_HOOK_SESSION_ID`, `JCODE_HOOK_CWD`, event fields, and a JSON `JCODE_HOOK_PAYLOAD`;
 - resumes a native session with `jcode --resume <session-id>`.
