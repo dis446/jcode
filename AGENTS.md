@@ -80,13 +80,14 @@ fork and `upstream` is `1jehuang/jcode`. Work directly on `master`, which is a
 small rebased series on top of `upstream/master`. Do not create long-lived
 feature branches and do not run `jcode update`.
 
-- Record every custom change in the `FORK.md` ledger and export its patch to
-  `patches/`. Before adding code, apply the feature-request prudence ladder and
-  record the chosen layer. Keep changes additive: new modules plus thin hooks
-  into upstream files.
+- Record every custom change in the `FORK.md` ledger. Git history is the patch
+  series; generate a diff with `git format-patch` only when one is needed, and do
+  not commit generated patch files. Before adding code, apply the feature-request
+  prudence ladder and record the chosen layer. Keep changes additive: new modules
+  plus thin hooks into upstream files.
 - Upgrade by fetching `upstream`, rebasing `master`, resolving conflicts per the
-  ledger hints, re-exporting patches, and updating the ledger base. The pinned
-  upstream base is in `~/dotfiles/jcode/UPSTREAM_VERSION`.
+  ledger hints, and updating the ledger base. The pinned upstream base is in
+  `~/dotfiles/jcode/UPSTREAM_VERSION`.
 - Installation is owned by `~/dotfiles/scripts/jcode-install.sh`, which builds
   `master` and installs into `~/.jcode/builds/versions/`.
 
