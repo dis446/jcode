@@ -1211,13 +1211,12 @@ pub(in crate::tui::app) async fn submit_prepared_remote_enter_input(
             // turn holds the agent lock). Keep the old view and defer the
             // rename until SessionId and Done prove the replacement exists.
             app.pending_new_session_rename = None;
-            app.pending_remote_new_session =
-                Some(crate::tui::app::PendingRemoteNewSession {
-                    clear_request_id,
-                    name,
-                    clear_done: false,
-                    confirmed_session_id: None,
-                });
+            app.pending_remote_new_session = Some(crate::tui::app::PendingRemoteNewSession {
+                clear_request_id,
+                name,
+                clear_done: false,
+                confirmed_session_id: None,
+            });
             app.set_status_notice("Starting new session...");
             return Ok(());
         }

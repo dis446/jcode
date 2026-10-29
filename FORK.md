@@ -51,6 +51,7 @@ install entry point.
 | C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tool-core`: `lib.rs` (`Tool::is_project_tool` default). `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir` + `_with_global`), `server/client_session.rs` (subscribe + two resume paths), `server/headless.rs`, `server.rs`, `server/worker_revive.rs`. Root `src/cli/commands.rs`. New: `tool/project.rs`, `docs/PROJECT_TOOLS.md`. Project registration is independent of MCP and runs after the fixed MCP tools at each session site. | [doc](docs/PROJECT_TOOLS.md) | yes (new module + thin hooks) |
 | C3 | `/new [name]` slash command (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.345-dev) | `jcode-tui`: `app.rs` (pending new-session state), `app/tui_lifecycle.rs` (2 inits), `app/commands.rs` (`handle_session_command`), `app/commands_review.rs` (`reset_current_session` keeps working dir, refreshes title/cache), `app/remote.rs` (deferred clear completion), `app/remote/key_handling.rs` (deferred `/new`, stale-state reset), `app/remote/server_events.rs` (Clear Done/Error and quiet rename), `app/state_ui_input_helpers.rs` (registry), `tui/backend.rs` (`rename_session` returns request id), `ui_overlays.rs` (help). New: `app/tests/new_session_command.rs` | n/a | yes (additive slash command) |
 | C4 | Live provider credit chip (DeepSeek/Moonshot balance) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.356-dev) | `jcode-base`: `usage.rs` (`mod balance;` + re-export), `usage/api_keys.rs` (`configured_key` becomes `pub(super)`; the DeepSeek/Moonshot balance fetch+parse bodies move into `usage/balance.rs`, and `/usage` calls the same functions the chip does). `jcode-config-types`: `display.rs` (`provider_balance`). `jcode-tui`: `tui/mod.rs` (module + `TuiState::provider_balance_chip`), `app.rs` (module + field), `app/tui_lifecycle.rs` (2 inits), `app/tui_state.rs`, `app/local.rs`, `app/remote.rs`, `ui_input.rs` (`draw_status` right-aligned chip). New: `jcode-base/src/usage/balance.rs`, `tui/provider_balance.rs`, `app/provider_balance.rs` | n/a | yes (new modules + thin hooks) |
+| C5 | `ask_user_question` branching TUI dialog | in progress on `feat/ask-user-question` | upstream `master` | `jcode-tool-types`: `lib.rs`, `Cargo.toml` (serde, question types). `jcode-tool-core`: `lib.rs` (interactive input kind). `jcode-protocol`: `lib.rs`, `wire.rs`, `wire/events.rs`, `Cargo.toml`. `jcode-app-core`: `tool/mod.rs`, `tool/bash.rs`, `agent/turn_execution.rs`, `server/client_session.rs`, `server/client_lifecycle.rs`, `server/client_actions.rs`, protocol tests. `jcode-tui`: `tui/mod.rs`, `app.rs`, `app/tui_lifecycle.rs`, `app/tui_state.rs`, `app/input.rs`, `app/remote/key_handling.rs`, `app/remote/server_events.rs`, `app/remote.rs`, `tui/backend.rs`, `tui/ui.rs`. New: `tool/ask_user_question.rs`, `tui/question_overlay.rs`, `app/question_overlay.rs`, `docs/ASK_USER_QUESTION.md` | [plan](plans/ask-user-question.md) | yes (one new tool, one new TUI module, thin hooks) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
@@ -145,6 +146,22 @@ C4 conflict hints: the chip hook is the last three lines of `draw_status`
 `None` in `tui/mod.rs`; the poller refresh rides beside `refresh_justrust_status`
 in `app/local.rs` and `app/remote.rs`. If upstream changes those lines, the
 unique `refresh_provider_balance` call is the anchor.
+C5 best-way check: no upstream question tool exists, no config, skill, or MCP
+path can render a native structured dialog, and the blocking tool-to-client
+interactive-input primitive already exists. Chosen layer: minimal additive fork
+code extending that primitive.
+C5 verify: `cargo test -p jcode-tool-types`, `cargo test -p jcode-protocol`,
+`cargo test -p jcode-app-core ask_user_question`, `cargo test -p jcode-app-core
+user_question`, `cargo test -p jcode-tui --lib question_overlay`, plus
+`e2e/run.py --binary <bin> --suite all`. Runtime: a TUI session asks the model
+to use `ask_user_question`, follows a converging branch, types a custom answer,
+and reviews the result.
+C5 conflict hints: the tool registry gate sits beside `set_desktop_ui_enabled`;
+the capability apply helper sits beside `apply_or_defer_desktop_response_capability`;
+the forwarder match sits in the existing `stdin_req_rx` loop; the TUI hooks sit
+beside the session-picker hooks in the two key paths, `draw_inner`, and the two
+App constructors. Protocol test struct literals are the first compile failure
+when upstream adds a `Subscribe` field.
 Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
 extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
 `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.
