@@ -283,7 +283,7 @@ fn deepseek_snapshot_from_json(json: &serde_json::Value) -> Result<BalanceSnapsh
 
 /// OpenCode Go exposes plan usage as percentages for its rolling 5-hour,
 /// weekly, and monthly windows. The endpoint is unofficial: there is no
-/// documented public API, so a failure keeps the last good chip rather than
+/// documented public API, so a failure is surfaced as an error instead of
 /// inventing numbers.
 pub(super) async fn opencode_go_snapshot(api_key: &str) -> Result<BalanceSnapshot> {
     let json = get_balance_json("https://opencode.ai/zen/go/v1/usage", api_key).await?;
