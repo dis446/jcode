@@ -108,6 +108,40 @@ fn zellij_kitty_images_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// Herdr renders Kitty graphics itself and masks the outer terminal's
+/// identity, so an environment miss there means "unknown", not "no images".
+/// Set `JCODE_HERDR_KITTY_IMAGES=0` when Herdr's `terminal.kitty_graphics` is
+/// disabled or its renderer misbehaves in this terminal.
+fn herdr_kitty_images_enabled() -> bool {
+    std::env::var("JCODE_HERDR_KITTY_IMAGES")
+        .ok()
+        .as_deref()
+        .and_then(parse_env_bool)
+        .unwrap_or(true)
+}
+
+/// Protocol to assume when the fast env path cannot identify the outer
+/// terminal. Only Herdr is promoted: it implements Kitty graphics for child
+/// applications (`terminal.kitty_graphics`, on by default since 0.9.5) while
+/// rewriting `TERM` to `xterm-256color`, stripping `KITTY_WINDOW_ID`, and
+/// exporting `TERM_PROGRAM=herdr`.
+pub(super) fn fast_path_assumed_protocol(
+    mode: PickerInitMode,
+    env_protocol: Option<ProtocolType>,
+    multiplexer: Multiplexer,
+    herdr_kitty_enabled: bool,
+) -> Option<ProtocolType> {
+    if mode == PickerInitMode::Fast
+        && env_protocol.is_none()
+        && multiplexer == Multiplexer::Herdr
+        && herdr_kitty_enabled
+    {
+        Some(ProtocolType::Kitty)
+    } else {
+        None
+    }
+}
+
 pub(super) fn use_classic_kitty() -> bool {
     #[cfg(test)]
     {
@@ -467,6 +501,18 @@ pub fn init_picker() {
             PickerInitMode::Fast => fast_picker(),
             PickerInitMode::Probe => probe_picker(),
         };
+        if let Some(assumed) = fast_path_assumed_protocol(
+            mode,
+            env_protocol,
+            multiplexer,
+            herdr_kitty_images_enabled(),
+        ) {
+            crate::log_info(
+                "Herdr masks the outer terminal identity; assuming Kitty graphics \
+                 (JCODE_HERDR_KITTY_IMAGES=0 to opt out)",
+            );
+            picker.set_protocol_type(assumed);
+        }
         apply_multiplexer_protocol_limits(&mut picker, multiplexer);
         Some(picker)
     });
@@ -1017,6 +1063,48 @@ mod tests {
             decide_picker_init_mode(None, None, Multiplexer::None),
             PickerInitMode::Fast
         );
+    }
+
+    #[test]
+    fn herdr_fast_path_assumes_kitty_when_env_is_masked() {
+        // Herdr strips the outer terminal identity but renders Kitty graphics
+        // itself, so an env miss there must not mean "no images".
+        assert_eq!(
+            fast_path_assumed_protocol(PickerInitMode::Fast, None, Multiplexer::Herdr, true),
+            Some(ProtocolType::Kitty)
+        );
+        // The opt-out keeps the halfblocks fallback for disabled Herdr builds.
+        assert_eq!(
+            fast_path_assumed_protocol(PickerInitMode::Fast, None, Multiplexer::Herdr, false),
+            None
+        );
+        // A real env signal is never overridden.
+        assert_eq!(
+            fast_path_assumed_protocol(
+                PickerInitMode::Fast,
+                Some(ProtocolType::Sixel),
+                Multiplexer::Herdr,
+                true
+            ),
+            None
+        );
+        // Probe answers are authoritative and must not be second-guessed.
+        assert_eq!(
+            fast_path_assumed_protocol(PickerInitMode::Probe, None, Multiplexer::Herdr, true),
+            None
+        );
+        // Other masking multiplexers keep their existing behaviour.
+        for mux in [
+            Multiplexer::None,
+            Multiplexer::Tmux,
+            Multiplexer::Screen,
+            Multiplexer::Zellij,
+        ] {
+            assert_eq!(
+                fast_path_assumed_protocol(PickerInitMode::Fast, None, mux, true),
+                None
+            );
+        }
     }
 
     #[test]
