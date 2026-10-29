@@ -305,8 +305,19 @@ pub enum Request {
     },
 
     /// Execute a shell command from `!cmd` in the active remote session.
+    ///
+    /// `cwd` overrides the session working directory (project commands run at
+    /// their config root). `timeout_secs` is `None` for plain `!cmd`, which
+    /// keeps the historical "run until it finishes or is cancelled" behavior.
     #[serde(rename = "input_shell")]
-    InputShell { id: u64, command: String },
+    InputShell {
+        id: u64,
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_secs: Option<u64>,
+    },
 
     /// Cycle the active model (direction: 1 for next, -1 for previous)
     #[serde(rename = "cycle_model")]

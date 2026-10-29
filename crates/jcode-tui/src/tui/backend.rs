@@ -1003,10 +1003,7 @@ impl RemoteConnection {
 
     pub async fn rename_session(&mut self, title: Option<String>) -> Result<u64> {
         let id = self.next_request_id;
-        let request = Request::RenameSession {
-            id,
-            title,
-        };
+        let request = Request::RenameSession { id, title };
         self.next_request_id += 1;
         self.send_request(request).await?;
         Ok(id)
@@ -1030,8 +1027,24 @@ impl RemoteConnection {
 
     /// Execute a `!cmd` shell command in the active remote session.
     pub async fn send_input_shell(&mut self, command: String) -> Result<u64> {
+        self.send_input_shell_with(command, None, None).await
+    }
+
+    /// Execute a shell line, optionally in a specific directory and with a
+    /// deadline. `None` keeps the plain `!cmd` behavior.
+    pub async fn send_input_shell_with(
+        &mut self,
+        command: String,
+        cwd: Option<String>,
+        timeout_secs: Option<u64>,
+    ) -> Result<u64> {
         let id = self.next_request_id;
-        let request = Request::InputShell { id, command };
+        let request = Request::InputShell {
+            id,
+            command,
+            cwd,
+            timeout_secs,
+        };
         self.next_request_id += 1;
         self.send_request(request).await?;
         Ok(id)

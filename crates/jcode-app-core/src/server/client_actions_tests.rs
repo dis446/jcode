@@ -1155,3 +1155,90 @@ async fn user_question_response_resolves_the_waiter_and_acks() {
         Some(ServerEvent::Done { id: 8 })
     ));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_shell_returns_stderr_and_exit_code() {
+    let result = super::run_input_shell(
+        "echo out; echo err >&2; exit 3".to_string(),
+        None,
+        None,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    )
+    .await;
+    assert_eq!(result.exit_code, Some(3));
+    assert!(result.output.contains("out"), "{}", result.output);
+    assert!(result.output.contains("[stderr]"), "{}", result.output);
+    assert!(result.output.contains("err"), "{}", result.output);
+    assert!(!result.failed_to_start);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_shell_runs_in_the_requested_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let expected = std::fs::canonicalize(dir.path()).unwrap();
+    let result = super::run_input_shell(
+        "pwd".to_string(),
+        Some(dir.path().to_string_lossy().to_string()),
+        None,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    )
+    .await;
+    assert_eq!(
+        std::fs::canonicalize(result.output.trim()).unwrap(),
+        expected
+    );
+    assert_eq!(
+        result.cwd.as_deref(),
+        Some(dir.path().to_string_lossy().as_ref())
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_shell_times_out_and_stops_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("finished");
+    let command = format!(
+        "sleep 3; printf done > {}",
+        marker.to_string_lossy().replace(' ', "\\ ")
+    );
+    let started = std::time::Instant::now();
+    let result = super::run_input_shell(
+        command,
+        None,
+        Some(1),
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    )
+    .await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    assert!(result.output.contains("timed out"), "{}", result.output);
+    assert_eq!(result.exit_code, None);
+    // The killed child must not have reached its post-sleep write.
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert!(!marker.exists(), "timed-out child kept running");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_shell_cancels_and_stops_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("cancelled-finished");
+    let command = format!(
+        "sleep 3; printf done > {}",
+        marker.to_string_lossy().replace(' ', "\\ ")
+    );
+    let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
+    let trigger = std::sync::Arc::clone(&cancel);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        trigger.notify_one();
+    });
+    let started = std::time::Instant::now();
+    let result = super::run_input_shell(command, None, None, cancel).await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    assert_eq!(result.output, "Command cancelled");
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert!(!marker.exists(), "cancelled child kept running");
+}
