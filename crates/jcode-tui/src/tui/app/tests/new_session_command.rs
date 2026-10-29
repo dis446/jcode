@@ -2,6 +2,23 @@
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+fn side_panel_snapshot_with_one_page() -> crate::side_panel::SidePanelSnapshot {
+    crate::side_panel::SidePanelSnapshot {
+        focus_revision: 0,
+        focused_page_id: Some("page-from-old-session".to_string()),
+        pages: vec![crate::side_panel::SidePanelPage {
+            id: "page-from-old-session".to_string(),
+            title: "Old session goals".to_string(),
+            file_path: "/tmp/old-session-goals.md".to_string(),
+            format: Default::default(),
+            pdf_data: None,
+            source: Default::default(),
+            content: "leftover content".to_string(),
+            updated_at_ms: 1,
+        }],
+    }
+}
+
 #[test]
 fn local_new_starts_fresh_session_with_name() {
     let mut app = create_test_app();
@@ -54,6 +71,43 @@ fn local_new_trims_the_name() {
     ));
 
     assert_eq!(app.session.display_title(), Some("spaced out name"));
+}
+
+#[test]
+fn new_is_registered_for_discovery() {
+    assert!(super::registered_command_names().any(|name| name == "/new"));
+    assert!(super::registered_command_entries().any(|(name, _)| name == "/new"));
+}
+
+#[test]
+fn local_new_clears_side_panel_pages() {
+    let mut app = create_test_app();
+    app.apply_side_panel_snapshot(side_panel_snapshot_with_one_page());
+    assert!(app.side_panel.has_pages());
+
+    assert!(super::commands::handle_session_command(&mut app, "/new"));
+
+    assert!(!app.side_panel.has_pages());
+    assert!(app.side_panel.focused_page_id.is_none());
+}
+
+#[test]
+fn remote_new_clears_side_panel_pages() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    remote.mark_history_loaded();
+    app.is_remote = true;
+    app.apply_side_panel_snapshot(side_panel_snapshot_with_one_page());
+    app.input = "/new".to_string();
+    app.cursor_pos = app.input.len();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+        .expect("remote /new should succeed");
+
+    assert!(!app.side_panel.has_pages());
+    assert!(app.side_panel.focused_page_id.is_none());
 }
 
 #[test]
