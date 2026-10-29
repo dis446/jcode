@@ -84,6 +84,7 @@ impl Client {
             system_prompt: None,
             supports_pdf_panels: false,
             supports_user_response: false,
+            supports_user_question: false,
             supports_server_failover: false,
             supports_turn_identity: false,
             id,

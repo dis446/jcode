@@ -1,4 +1,7 @@
-use super::{BACKGROUND_WAIT_GUIDANCE, StdinInputRequest, Tool, ToolContext, ToolOutput};
+use super::{
+    BACKGROUND_WAIT_GUIDANCE, InteractiveInputKind, InteractiveInputRequest,
+    InteractiveInputResponse, Tool, ToolContext, ToolOutput,
+};
 use crate::background::TaskResult;
 use crate::bus::{
     BackgroundTaskProgress, BackgroundTaskProgressKind, BackgroundTaskProgressSource,
@@ -989,10 +992,12 @@ impl BashTool {
                                     let (response_tx, response_rx) =
                                         tokio::sync::oneshot::channel();
 
-                                    let request = StdinInputRequest {
+                                    let request = InteractiveInputRequest {
                                         request_id,
+                                        tool_call_id: tool_call_id.clone(),
                                         prompt: String::new(),
                                         is_password: false,
+                                        kind: InteractiveInputKind::Text,
                                         response_tx,
                                     };
 
@@ -1017,7 +1022,7 @@ impl BashTool {
                                     )
                                     .await
                                     {
-                                        Ok(Ok(input)) => {
+                                        Ok(Ok(InteractiveInputResponse::Text(input))) => {
                                             let line = if input.ends_with('\n') {
                                                 input
                                             } else {
@@ -1031,7 +1036,9 @@ impl BashTool {
                                                 break;
                                             }
                                         }
-                                        Ok(Err(_)) | Err(_) => {
+                                        Ok(Ok(InteractiveInputResponse::Questions(_)))
+                                        | Ok(Err(_))
+                                        | Err(_) => {
                                             drop(stdin_pipe);
                                             break;
                                         }
