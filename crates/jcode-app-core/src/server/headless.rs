@@ -87,6 +87,9 @@ pub(super) async fn create_headless_session(
             working_dir.clone(),
         )
         .await;
+    registry
+        .register_project_tools_for_dir(working_dir.clone())
+        .await;
 
     let working_dir_string = working_dir
         .as_ref()
