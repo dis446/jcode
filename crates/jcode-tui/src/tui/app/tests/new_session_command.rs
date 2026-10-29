@@ -34,6 +34,29 @@ fn local_new_without_name_leaves_session_unnamed() {
 }
 
 #[test]
+fn local_new_requires_a_command_boundary() {
+    let mut app = create_test_app();
+    let old_id = app.session.id.clone();
+
+    assert!(!super::commands::handle_session_command(&mut app, "/newer"));
+    assert!(!super::commands::handle_session_command(&mut app, "/newest"));
+
+    assert_eq!(app.session.id, old_id);
+}
+
+#[test]
+fn local_new_trims_the_name() {
+    let mut app = create_test_app();
+
+    assert!(super::commands::handle_session_command(
+        &mut app,
+        "/new   spaced out name  "
+    ));
+
+    assert_eq!(app.session.display_title(), Some("spaced out name"));
+}
+
+#[test]
 fn remote_new_sends_clear_then_rename() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
