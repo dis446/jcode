@@ -1316,6 +1316,17 @@ impl Registry {
     pub async fn register(&self, name: String, tool: Arc<dyn Tool>) {
         let mut tools = self.tools.write().await;
         let is_mcp = tool.mcp_identity().is_some();
+        if tools
+            .get(&name)
+            .is_some_and(|existing| existing.is_project_tool() && !tool.is_project_tool())
+        {
+            // Project tools register after the fixed MCP tools but before the
+            // dynamic MCP connections settle. A late MCP tool with the same
+            // name replaces the project tool; make that race visible.
+            crate::logging::warn(&format!(
+                "project tools: '{name}' was replaced by a later non-project registration"
+            ));
+        }
         tools.insert(name, tool);
         if is_mcp {
             self.record_mcp_surface(&tools);
@@ -1528,9 +1539,23 @@ impl Registry {
     /// so inserting only new keys leaves obsolete cached aliases callable.
     pub async fn reconcile_mcp_tools(&self, fresh: Vec<(String, Arc<dyn Tool>)>) {
         let mut tools = self.tools.write().await;
+        let replaced_project_tools: Vec<String> = fresh
+            .iter()
+            .filter(|(name, _)| {
+                tools
+                    .get(name)
+                    .is_some_and(|existing| existing.is_project_tool())
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
         tools.retain(|_, tool| tool.mcp_identity().is_none());
         tools.extend(fresh);
         self.record_mcp_surface(&tools);
+        for name in replaced_project_tools {
+            crate::logging::warn(&format!(
+                "project tools: '{name}' was replaced by a reconciled MCP tool"
+            ));
+        }
     }
 
     /// Remove exact server membership, never a lossy normalized prefix.

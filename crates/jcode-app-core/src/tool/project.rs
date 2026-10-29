@@ -39,6 +39,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -49,6 +50,10 @@ const MAX_TIMEOUT_SECS: u64 = 3600;
 const MAX_RESULT_BYTES: usize = 128 * 1024;
 const READ_CHUNK_BYTES: usize = 8 * 1024;
 const MAX_NAME_LEN: usize = 64;
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+const MAX_TOOLS: usize = 128;
+const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
+const MAX_PARAMETERS_BYTES: usize = 32 * 1024;
 /// Generic flags jcode adds to every tool schema; the command should not see
 /// them. `intent` is stripped only when the declared schema does not own it.
 const ACCEPT_LARGE_OUTPUT: &str = "accept_large_output";
@@ -63,12 +68,14 @@ enum CwdMode {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ToolsFile {
     #[serde(default)]
     tools: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ToolEntry {
     name: String,
     #[serde(default)]
@@ -119,6 +126,11 @@ impl ProjectToolSpec {
         if description.is_empty() {
             bail!("tool '{name}' has an empty description");
         }
+        if description.len() > MAX_DESCRIPTION_BYTES {
+            bail!(
+                "tool '{name}' description exceeds {MAX_DESCRIPTION_BYTES} bytes"
+            );
+        }
         if entry.command.is_empty() {
             bail!("tool '{name}' has no command");
         }
@@ -127,11 +139,31 @@ impl ProjectToolSpec {
                 if map.get("type").and_then(Value::as_str) != Some("object") {
                     bail!("tool '{name}' parameters must have \"type\": \"object\"");
                 }
+                if let Some(properties) = map.get("properties")
+                    && !properties.is_object()
+                {
+                    bail!("tool '{name}' parameters.properties must be a JSON object");
+                }
+                if let Some(required) = map.get("required") {
+                    let Some(required) = required.as_array() else {
+                        bail!("tool '{name}' parameters.required must be an array");
+                    };
+                    if !required.iter().all(Value::is_string) {
+                        bail!(
+                            "tool '{name}' parameters.required entries must be strings"
+                        );
+                    }
+                }
                 Value::Object(map)
             }
             Some(_) => bail!("tool '{name}' parameters must be a JSON object schema"),
             None => json!({"type": "object", "properties": {}}),
         };
+        if parameters.to_string().len() > MAX_PARAMETERS_BYTES {
+            bail!(
+                "tool '{name}' parameters exceed {MAX_PARAMETERS_BYTES} bytes"
+            );
+        }
         let timeout_secs = entry
             .timeout_secs
             .unwrap_or(DEFAULT_TIMEOUT_SECS)
@@ -188,6 +220,65 @@ pub(crate) fn global_tools_path() -> Option<PathBuf> {
         .map(|dir| dir.join("tools.json"))
 }
 
+/// Read one tools file without following special files or unbounded growth.
+/// A missing file is silent; every other skip is logged and returns `None`.
+fn read_tools_config(path: &Path) -> Option<String> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            crate::logging::warn(&format!(
+                "project tools: cannot inspect {}: {err}",
+                path.display()
+            ));
+            return None;
+        }
+    };
+    if !metadata.is_file() {
+        crate::logging::warn(&format!(
+            "project tools: ignoring {}: not a regular file",
+            path.display()
+        ));
+        return None;
+    }
+    if metadata.len() > MAX_CONFIG_BYTES {
+        crate::logging::warn(&format!(
+            "project tools: ignoring {}: larger than {MAX_CONFIG_BYTES} bytes",
+            path.display()
+        ));
+        return None;
+    }
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) => {
+            crate::logging::warn(&format!(
+                "project tools: cannot read {}: {err}",
+                path.display()
+            ));
+            return None;
+        }
+    };
+    let mut raw = String::new();
+    if let Err(err) = file
+        .take(MAX_CONFIG_BYTES + 1)
+        .read_to_string(&mut raw)
+    {
+        crate::logging::warn(&format!(
+            "project tools: cannot read {}: {err}",
+            path.display()
+        ));
+        return None;
+    }
+    if raw.len() as u64 > MAX_CONFIG_BYTES {
+        crate::logging::warn(&format!(
+            "project tools: ignoring {}: larger than {MAX_CONFIG_BYTES} bytes",
+            path.display()
+        ));
+        return None;
+    }
+    Some(raw)
+}
+
 /// Load global then project tool definitions. Project entries win on a name
 /// clash. A missing or malformed file never fails the session. `global` is the
 /// already-resolved global file, so tests never read the developer's real home.
@@ -217,16 +308,8 @@ pub(crate) fn load_specs_with_global(
 
     let mut merged: Vec<ProjectToolSpec> = Vec::new();
     for (path, default_cwd, kind) in sources {
-        let raw = match std::fs::read_to_string(&path) {
-            Ok(raw) => raw,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => {
-                crate::logging::warn(&format!(
-                    "project tools: cannot read {}: {err}",
-                    path.display()
-                ));
-                continue;
-            }
+        let Some(raw) = read_tools_config(&path) else {
+            continue;
         };
         // Resolve the real path so a symlinked config runs its commands from
         // the project that owns the file, not the link's location. A repo file
@@ -262,7 +345,18 @@ pub(crate) fn load_specs_with_global(
                 }
             };
             match ProjectToolSpec::validate(entry, &base_dir, default_cwd) {
-                Ok(spec) => merge_spec(&mut merged, spec),
+                Ok(spec) => {
+                    if !merged.iter().any(|existing| existing.name == spec.name)
+                        && merged.len() >= MAX_TOOLS
+                    {
+                        crate::logging::warn(&format!(
+                            "project tools: ignoring '{}': limit is {MAX_TOOLS} tools",
+                            spec.name
+                        ));
+                        continue;
+                    }
+                    merge_spec(&mut merged, spec);
+                }
                 Err(err) => crate::logging::warn(&format!(
                     "project tools: skipping an entry in {}: {err}",
                     path.display()
@@ -341,6 +435,31 @@ fn cap_output(mut output: String, extra_omitted: usize) -> String {
     output
 }
 
+/// Join the primary stream with the secondary stream. If the primary is empty
+/// the secondary is either labeled (success output still promises `[stderr]`)
+/// or returned bare (a stderr-only failure should read naturally).
+fn compose_output(
+    primary: String,
+    secondary: String,
+    secondary_label: &str,
+    label_when_primary_empty: bool,
+) -> String {
+    let mut combined = primary.trim_end().to_string();
+    let secondary = secondary.trim_end();
+    if secondary.is_empty() {
+        return combined;
+    }
+    if !combined.is_empty() {
+        combined.push('\n');
+    }
+    if !combined.is_empty() || label_when_primary_empty {
+        combined.push_str(secondary_label);
+        combined.push('\n');
+    }
+    combined.push_str(secondary);
+    combined
+}
+
 #[async_trait]
 impl Tool for ProjectTool {
     fn name(&self) -> &str {
@@ -399,6 +518,7 @@ impl Tool for ProjectTool {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
+        let shutdown = ctx.graceful_shutdown_signal.clone();
         // The timeout covers writing stdin, reading both pipes, and waiting.
         // A child that never reads a large input therefore cannot hang the
         // call beyond `timeout_secs`.
@@ -419,32 +539,40 @@ impl Tool for ProjectTool {
             Ok::<_, anyhow::Error>((stdout, stdout_omitted, stderr, stderr_omitted, status))
         };
 
-        let (stdout, stdout_omitted, stderr, stderr_omitted, status) =
-            match tokio::time::timeout(self.spec.timeout, exchange).await {
-                Ok(result) => result?,
-                Err(_) => bail!(
-                    "tool '{}' timed out after {}s",
-                    self.spec.name,
-                    self.spec.timeout.as_secs()
-                ),
-            };
+        let exchange_result = match shutdown {
+            Some(signal) => {
+                tokio::select! {
+                    biased;
+                    _ = signal.notified() => bail!(
+                        "tool '{}' cancelled",
+                        self.spec.name
+                    ),
+                    result = tokio::time::timeout(self.spec.timeout, exchange) => result,
+                }
+            }
+            None => tokio::time::timeout(self.spec.timeout, exchange).await,
+        };
+        let (stdout, stdout_omitted, stderr, stderr_omitted, status) = match exchange_result {
+            Ok(result) => result?,
+            Err(_) => bail!(
+                "tool '{}' timed out after {}s",
+                self.spec.name,
+                self.spec.timeout.as_secs()
+            ),
+        };
 
         let omitted = stdout_omitted + stderr_omitted;
-        let mut combined = lossy_string(stdout).trim_end().to_string();
+        let stdout = lossy_string(stdout);
         let stderr = lossy_string(stderr);
-        if !stderr.trim().is_empty() {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str("[stderr]\n");
-            combined.push_str(stderr.trim_end());
-        }
 
         if !status.success() {
             let status = status
                 .code()
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| "signal".to_string());
+            // Put stderr first: it usually carries the failure reason, and
+            // stdout can fill the result cap on its own.
+            let combined = compose_output(stderr, stdout, "[stdout]", false);
             bail!(
                 "tool '{}' exited with status {status}\n{}",
                 self.spec.name,
@@ -452,6 +580,7 @@ impl Tool for ProjectTool {
             );
         }
 
+        let combined = compose_output(stdout, stderr, "[stderr]", true);
         Ok(ToolOutput::new(cap_output(combined, omitted))
             .with_title(self.spec.name.clone())
             .with_metadata(json!({"command": self.spec.command, "cwd": cwd})))
@@ -507,6 +636,111 @@ mod tests {
         let specs = load_specs_with_global(Some(dir.path()), None);
         assert_eq!(names(&specs), vec!["echo_json"]);
         assert_eq!(specs[0].base_dir, fs::canonicalize(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn rejects_unknown_entry_and_file_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tools(
+            dir.path(),
+            json!({"tools": [
+                {"name": "typo", "description": "x", "command": ["/bin/true"], "timeout_sec": 5}
+            ]}),
+        );
+        assert!(load_specs_with_global(Some(dir.path()), None).is_empty());
+
+        write_tools(
+            dir.path(),
+            json!({"tool": [
+                {"name": "typo", "description": "x", "command": ["/bin/true"]}
+            ]}),
+        );
+        assert!(load_specs_with_global(Some(dir.path()), None).is_empty());
+    }
+
+    #[test]
+    fn rejects_malformed_properties_and_required() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tools(
+            dir.path(),
+            json!({"tools": [
+                {
+                    "name": "bad_properties",
+                    "description": "x",
+                    "command": ["/bin/true"],
+                    "parameters": {"type": "object", "properties": "nope"}
+                },
+                {
+                    "name": "bad_required",
+                    "description": "x",
+                    "command": ["/bin/true"],
+                    "parameters": {"type": "object", "properties": {}, "required": "nope"}
+                },
+                {
+                    "name": "bad_required_entry",
+                    "description": "x",
+                    "command": ["/bin/true"],
+                    "parameters": {"type": "object", "properties": {}, "required": [1]}
+                }
+            ]}),
+        );
+        assert!(load_specs_with_global(Some(dir.path()), None).is_empty());
+    }
+
+    #[test]
+    fn rejects_oversized_description() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tools(
+            dir.path(),
+            json!({"tools": [{
+                "name": "long_description",
+                "description": "x".repeat(MAX_DESCRIPTION_BYTES + 1),
+                "command": ["/bin/true"]
+            }]}),
+        );
+        assert!(load_specs_with_global(Some(dir.path()), None).is_empty());
+    }
+
+    #[test]
+    fn ignores_oversized_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".jcode")).unwrap();
+        fs::write(
+            dir.path().join(".jcode").join("tools.json"),
+            vec![b' '; (MAX_CONFIG_BYTES + 1) as usize],
+        )
+        .unwrap();
+        assert!(load_specs_with_global(Some(dir.path()), None).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignores_non_regular_config_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".jcode")).unwrap();
+        symlink("/dev/null", dir.path().join(".jcode").join("tools.json")).unwrap();
+        assert!(load_specs_with_global(Some(dir.path()), None).is_empty());
+    }
+
+    #[test]
+    fn caps_the_number_of_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools: Vec<Value> = (0..MAX_TOOLS + 2)
+            .map(|index| {
+                json!({
+                    "name": format!("tool_{index}"),
+                    "description": "x",
+                    "command": ["/bin/true"]
+                })
+            })
+            .collect();
+        write_tools(dir.path(), json!({"tools": tools}));
+        assert_eq!(
+            load_specs_with_global(Some(dir.path()), None).len(),
+            MAX_TOOLS
+        );
     }
 
     #[test]
@@ -810,6 +1044,29 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn failure_keeps_stderr_when_stdout_fills_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tools(
+            dir.path(),
+            json!({"tools": [{
+                "name": "fail_loud",
+                "description": "fail",
+                "command": ["/bin/sh", "-c", "yes x | head -c 200000; echo boom >&2; exit 3"],
+                "timeout_secs": 10
+            }]}),
+        );
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
+        let err = ProjectTool::new(spec)
+            .execute(json!({}), ctx(Some(dir.path().to_path_buf())))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("boom"), "{err}");
+        assert!(err.contains("[stdout]"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn timeout_kills_and_reports() {
         let dir = tempfile::tempdir().unwrap();
         write_tools(
@@ -825,6 +1082,37 @@ mod tests {
             .to_string();
         assert!(err.contains("timed out"), "{err}");
         assert!(start.elapsed() < Duration::from_secs(4));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn graceful_shutdown_cancels_a_running_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tools(
+            dir.path(),
+            json!({"tools": [{
+                "name": "slow_cancel",
+                "description": "slow",
+                "command": ["/bin/sh", "-c", "sleep 5"],
+                "timeout_secs": 30
+            }]}),
+        );
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
+        let signal = jcode_agent_runtime::InterruptSignal::new();
+        let mut context = ctx(Some(dir.path().to_path_buf()));
+        context.graceful_shutdown_signal = Some(signal.clone());
+
+        let start = std::time::Instant::now();
+        let tool = ProjectTool::new(spec);
+        let execute = tool.execute(json!({}), context);
+        let fire = async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            signal.fire();
+        };
+        let (result, ()) = tokio::join!(execute, fire);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("cancelled"), "{err}");
+        assert!(start.elapsed() < Duration::from_secs(3));
     }
 
     #[cfg(unix)]
