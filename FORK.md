@@ -78,7 +78,10 @@ without a balance API) plus the manual live round-trip
 formatting, disable clears, provider switch drops the stale number, completed
 query schedules the next poll, failure renders nothing and backs off to 120s),
 and `cargo test -p jcode-config-types provider_balance_chip` (defaults on,
-absent key stays on, explicit false disables).
+absent key stays on, explicit false disables), and
+`cargo test -p jcode-tui --lib provider_balance_chip` (3 rendered-frame checks:
+the label lands at `width - label - 1` on the status row, nothing renders on a
+frame too narrow for it, and no chip means no extra chrome).
 Runtime: a DeepSeek session shows `DeepSeek $NN.NN` at the right edge of the
 status line, dim normally, amber under $5, red at zero; `[display]
 provider_balance = false` hides it; no chip for providers without a balance API.

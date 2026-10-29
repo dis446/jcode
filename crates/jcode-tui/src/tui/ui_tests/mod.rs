@@ -155,12 +155,16 @@ struct TestState {
     swarm_panel_focused: bool,
     pinned_todos_payload: Option<String>,
     justrust_status: Option<crate::tui::justrust_status::StatusRow>,
+    provider_balance_chip: Option<crate::tui::provider_balance::Chip>,
     swarm_panel_full_page: bool,
 }
 
 impl crate::tui::TuiState for TestState {
     fn justrust_status(&self) -> Option<&crate::tui::justrust_status::StatusRow> {
         self.justrust_status.as_ref()
+    }
+    fn provider_balance_chip(&self) -> Option<&crate::tui::provider_balance::Chip> {
+        self.provider_balance_chip.as_ref()
     }
     fn pinned_todos_payload(&self) -> Option<&str> {
         self.pinned_todos_payload.as_deref()
@@ -538,6 +542,8 @@ mod onboarding;
 mod palette_topology;
 #[path = "prepare.rs"]
 mod prepared_messages_tests;
+#[path = "provider_balance_chip.rs"]
+mod provider_balance_chip;
 #[path = "rendering.rs"]
 mod rendering;
 #[path = "scrollbar_overlay.rs"]
