@@ -560,6 +560,26 @@ pub(super) async fn apply_or_defer_desktop_response_capability(
     });
 }
 
+pub(super) async fn apply_or_defer_user_question_capability(
+    agent: &Arc<Mutex<Agent>>,
+    supports_user_question: bool,
+) {
+    if let Ok(mut guard) = agent.try_lock() {
+        guard
+            .set_user_question_capability(supports_user_question)
+            .await;
+        return;
+    }
+    let agent = Arc::clone(agent);
+    crate::runtime_activity::spawn(async move {
+        agent
+            .lock()
+            .await
+            .set_user_question_capability(supports_user_question)
+            .await;
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_subscribe(
     id: u64,

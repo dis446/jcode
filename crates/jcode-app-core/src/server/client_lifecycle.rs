@@ -356,6 +356,7 @@ pub(super) async fn handle_client(
     let mut model_usage_updates_enabled = false;
     let mut supports_pdf_panels = false;
     let mut supports_user_response = false;
+    let mut supports_user_question = false;
     let mut supports_server_failover = false;
     // Client selfdev status is determined by Subscribe request, not server's env
     let mut client_selfdev = false;
@@ -561,16 +562,19 @@ pub(super) async fn handle_client(
         }
     }
 
-    let stdin_responses: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let stdin_responses: Arc<
+        Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::tool::InteractiveInputResponse>>>,
+    > = Arc::new(Mutex::new(HashMap::new()));
+    let user_question_capability = Arc::new(AtomicBool::new(false));
 
     // Subscribe to bus events so we can forward ModelsUpdated to this client
     // (e.g. when Copilot finishes async init after the initial History was sent)
     let mut bus_rx = Bus::global().subscribe();
 
-    // Set up stdin request forwarding: tools send StdinInputRequest, we forward to TUI
+    // Set up interactive request forwarding: tools send an interactive request, we
+    // forward it to the attached client as stdin or as a question dialog.
     let (stdin_req_tx, mut stdin_req_rx) =
-        tokio::sync::mpsc::unbounded_channel::<crate::tool::StdinInputRequest>();
+        tokio::sync::mpsc::unbounded_channel::<crate::tool::InteractiveInputRequest>();
     {
         let mut agent_guard = agent.lock().await;
         agent_guard.set_stdin_request_tx(stdin_req_tx.clone());
@@ -578,20 +582,50 @@ pub(super) async fn handle_client(
     let stdin_forwarder = {
         let client_event_tx = client_event_tx.clone();
         let stdin_responses = stdin_responses.clone();
-        let tool_call_id = String::new();
+        let user_question_capability = user_question_capability.clone();
         tokio::spawn(async move {
             while let Some(req) = stdin_req_rx.recv().await {
                 let request_id = req.request_id.clone();
-                stdin_responses
-                    .lock()
-                    .await
-                    .insert(request_id.clone(), req.response_tx);
-                let _ = client_event_tx.send(ServerEvent::StdinRequest {
-                    request_id,
-                    prompt: req.prompt,
-                    is_password: req.is_password,
-                    tool_call_id: tool_call_id.clone(),
-                });
+                let tool_call_id = req.tool_call_id.clone();
+                match req.kind {
+                    crate::tool::InteractiveInputKind::Text => {
+                        stdin_responses
+                            .lock()
+                            .await
+                            .insert(request_id.clone(), req.response_tx);
+                        let _ = client_event_tx.send(ServerEvent::StdinRequest {
+                            request_id,
+                            prompt: req.prompt,
+                            is_password: req.is_password,
+                            tool_call_id,
+                        });
+                    }
+                    crate::tool::InteractiveInputKind::Questions(payload) => {
+                        if !user_question_capability.load(Ordering::Relaxed) {
+                            let _ = req.response_tx.send(
+                                crate::tool::InteractiveInputResponse::Questions(
+                                    jcode_tool_types::UserQuestionResult::Cancelled {
+                                        reason: Some(
+                                            "client cannot render interactive questions".into(),
+                                        ),
+                                    },
+                                ),
+                            );
+                            continue;
+                        }
+                        stdin_responses
+                            .lock()
+                            .await
+                            .insert(request_id.clone(), req.response_tx);
+                        let _ = client_event_tx.send(ServerEvent::UserQuestionRequest {
+                            request_id,
+                            tool_call_id,
+                            intent: payload.intent,
+                            root: payload.root,
+                            questions: payload.questions,
+                        });
+                    }
+                }
             }
         })
     };
@@ -1465,6 +1499,7 @@ pub(super) async fn handle_client(
                 system_prompt,
                 supports_pdf_panels: requested_pdf_panels,
                 supports_user_response: requested_user_response,
+                supports_user_question: requested_user_question,
                 supports_server_failover: requested_server_failover,
                 working_dir: subscribe_working_dir,
                 selfdev,
@@ -1504,6 +1539,8 @@ pub(super) async fn handle_client(
                 continue_on_disconnect = requested_continuation;
                 supports_pdf_panels = requested_pdf_panels;
                 supports_user_response = requested_user_response;
+                supports_user_question = requested_user_question;
+                user_question_capability.store(requested_user_question, Ordering::Relaxed);
                 supports_server_failover = requested_server_failover;
                 active_terminal_env = terminal_env;
                 current_client_instance_id = client_instance_id.clone();
@@ -1687,6 +1724,11 @@ pub(super) async fn handle_client(
                     supports_user_response,
                 )
                 .await;
+                super::client_session::apply_or_defer_user_question_capability(
+                    &agent,
+                    supports_user_question,
+                )
+                .await;
                 client_subscribed = true;
                 provisional_session = false;
             }
@@ -1845,6 +1887,11 @@ pub(super) async fn handle_client(
                 super::client_session::apply_or_defer_desktop_response_capability(
                     &agent,
                     supports_user_response,
+                )
+                .await;
+                super::client_session::apply_or_defer_user_question_capability(
+                    &agent,
+                    supports_user_question,
                 )
                 .await;
                 session_control = refresh_session_control_handle(
@@ -2189,6 +2236,21 @@ pub(super) async fn handle_client(
             } => {
                 handle_stdin_response(id, request_id, input, &stdin_responses, &client_event_tx)
                     .await;
+            }
+
+            Request::UserQuestionResponse {
+                id,
+                request_id,
+                result,
+            } => {
+                super::client_actions::handle_user_question_response(
+                    id,
+                    request_id,
+                    result,
+                    &stdin_responses,
+                    &client_event_tx,
+                )
+                .await;
             }
 
             Request::AgentTask { id, task, .. } => {

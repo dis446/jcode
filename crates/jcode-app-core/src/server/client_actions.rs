@@ -1229,11 +1229,28 @@ pub(super) async fn handle_stdin_response(
     id: u64,
     request_id: String,
     input: String,
-    stdin_responses: &Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>,
+    stdin_responses: &Arc<
+        Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::tool::InteractiveInputResponse>>>,
+    >,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
 ) {
     if let Some(tx) = stdin_responses.lock().await.remove(&request_id) {
-        let _ = tx.send(input);
+        let _ = tx.send(crate::tool::InteractiveInputResponse::Text(input));
+    }
+    let _ = client_event_tx.send(ServerEvent::Done { id });
+}
+
+pub(super) async fn handle_user_question_response(
+    id: u64,
+    request_id: String,
+    result: jcode_tool_types::UserQuestionResult,
+    stdin_responses: &Arc<
+        Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::tool::InteractiveInputResponse>>>,
+    >,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
+    if let Some(tx) = stdin_responses.lock().await.remove(&request_id) {
+        let _ = tx.send(crate::tool::InteractiveInputResponse::Questions(result));
     }
     let _ = client_event_tx.send(ServerEvent::Done { id });
 }

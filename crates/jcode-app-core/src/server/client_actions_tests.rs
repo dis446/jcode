@@ -1109,3 +1109,49 @@ async fn daemon_saved_flag_survives_later_session_writes() {
         crate::env::remove_var("JCODE_HOME");
     }
 }
+
+#[tokio::test]
+async fn user_question_response_resolves_the_waiter_and_acks() {
+    let responses: Arc<
+        tokio::sync::Mutex<
+            HashMap<String, tokio::sync::oneshot::Sender<crate::tool::InteractiveInputResponse>>,
+        >,
+    > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    responses.lock().await.insert("req-1".into(), tx);
+    let (events, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    super::handle_user_question_response(
+        7,
+        "req-1".into(),
+        crate::protocol::UserQuestionResult::Answered { answers: vec![] },
+        &responses,
+        &events,
+    )
+    .await;
+    let resolved = rx.await.expect("waiter should resolve");
+    assert!(matches!(
+        resolved,
+        crate::tool::InteractiveInputResponse::Questions(
+            crate::protocol::UserQuestionResult::Answered { .. }
+        )
+    ));
+    assert!(matches!(
+        event_rx.recv().await,
+        Some(ServerEvent::Done { id: 7 })
+    ));
+
+    // A duplicate or stale response is ignored, but still acknowledged.
+    super::handle_user_question_response(
+        8,
+        "req-1".into(),
+        crate::protocol::UserQuestionResult::Cancelled { reason: None },
+        &responses,
+        &events,
+    )
+    .await;
+    assert!(matches!(
+        event_rx.recv().await,
+        Some(ServerEvent::Done { id: 8 })
+    ));
+}

@@ -450,7 +450,7 @@ impl Agent {
     /// Set the stdin request channel for interactive stdin forwarding
     pub fn set_stdin_request_tx(
         &mut self,
-        tx: tokio::sync::mpsc::UnboundedSender<crate::tool::StdinInputRequest>,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::tool::InteractiveInputRequest>,
     ) {
         self.stdin_request_tx = Some(tx);
     }
@@ -941,6 +941,21 @@ impl Agent {
             .any(|n| n == "user_response");
         if was_enabled != enabled {
             self.registry.set_desktop_ui_enabled(enabled).await;
+            self.invalidate_sdk_tools();
+        }
+    }
+
+    pub(crate) async fn set_user_question_capability(&mut self, enabled: bool) {
+        let was_enabled = self
+            .registry
+            .tool_names()
+            .await
+            .iter()
+            .any(|n| n == "ask_user_question");
+        if was_enabled != enabled {
+            self.registry
+                .set_interactive_questions_enabled(enabled)
+                .await;
             self.invalidate_sdk_tools();
         }
     }

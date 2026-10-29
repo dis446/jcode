@@ -3,6 +3,7 @@ pub(crate) const BACKGROUND_WAIT_GUIDANCE: &str = "While this task runs, try to 
 mod agentgrep;
 pub mod ambient;
 mod apply_patch;
+mod ask_user_question;
 mod bash;
 mod batch;
 mod bg;
@@ -104,7 +105,10 @@ use std::sync::{LazyLock, RwLock as StdRwLock};
 use tokio::sync::RwLock;
 
 pub(crate) use jcode_tool_core::intent_schema_property;
-pub use jcode_tool_core::{StdinInputRequest, Tool, ToolContext, ToolExecutionMode};
+pub use jcode_tool_core::{
+    InteractiveInputKind, InteractiveInputRequest, InteractiveInputResponse, QuestionRequest, Tool,
+    ToolContext, ToolExecutionMode,
+};
 pub use jcode_tool_types::{ToolImage, ToolOutput};
 pub(crate) use session_search::spawn_recent_index_warmup;
 
@@ -358,6 +362,21 @@ impl Registry {
         } else {
             self.unregister("user_response").await;
             self.unregister("applet").await;
+        }
+    }
+
+    /// Interactive clients that can render a question dialog opt in through
+    /// Subscribe. Keep the tool out of the base map so headless, SDK, and
+    /// Desktop registries never advertise it.
+    pub(crate) async fn set_interactive_questions_enabled(&self, enabled: bool) {
+        if enabled {
+            self.register(
+                "ask_user_question".into(),
+                Arc::new(ask_user_question::AskUserQuestionTool::new()),
+            )
+            .await;
+        } else {
+            self.unregister("ask_user_question").await;
         }
     }
 

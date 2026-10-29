@@ -26,6 +26,34 @@ fn base_tools_exclude_replace_and_keep_other_editing_tools() {
     }
 }
 
+#[tokio::test]
+async fn ask_user_question_is_only_registered_for_interactive_clients() {
+    let registry = Registry::empty();
+    assert!(
+        !registry
+            .tool_names()
+            .await
+            .iter()
+            .any(|name| name == "ask_user_question")
+    );
+    registry.set_interactive_questions_enabled(true).await;
+    assert!(
+        registry
+            .tool_names()
+            .await
+            .iter()
+            .any(|name| name == "ask_user_question")
+    );
+    registry.set_interactive_questions_enabled(false).await;
+    assert!(
+        !registry
+            .tool_names()
+            .await
+            .iter()
+            .any(|name| name == "ask_user_question")
+    );
+}
+
 struct TestHomeGuard {
     previous: Option<OsString>,
 }
