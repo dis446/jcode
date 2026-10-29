@@ -64,6 +64,7 @@ pub(crate) use redraw_schedule::{
     periodic_redraw_required_excluding_idle_animation, redraw_interval,
     redraw_interval_with_policy,
 };
+pub mod question_overlay;
 mod remote_diff;
 pub mod screenshot;
 pub(crate) mod session_facts;
@@ -1158,6 +1159,10 @@ pub trait TuiState {
     fn account_picker_overlay(&self) -> Option<&std::cell::RefCell<account_picker::AccountPicker>>;
     /// Usage overlay for /usage command
     fn usage_overlay(&self) -> Option<&std::cell::RefCell<usage_overlay::UsageOverlay>>;
+    /// Branching questionnaire dialog for `ask_user_question`.
+    fn question_overlay(&self) -> Option<&std::cell::RefCell<question_overlay::QuestionOverlay>> {
+        None
+    }
     /// Working directory for this session
     // ---- Misc ----
     fn working_dir(&self) -> Option<String>;

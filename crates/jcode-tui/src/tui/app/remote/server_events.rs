@@ -708,7 +708,10 @@ pub(in crate::tui::app) fn handle_server_event(
             name,
             output,
             error,
-        } => super::server_event_handlers::handle_tool_done(app, remote, id, name, output, error),
+        } => {
+            app.dismiss_question_for_tool(&id);
+            super::server_event_handlers::handle_tool_done(app, remote, id, name, output, error)
+        }
         ServerEvent::GeneratedImage {
             id,
             path,
@@ -1071,6 +1074,7 @@ pub(in crate::tui::app) fn handle_server_event(
             false
         }
         ServerEvent::Interrupted => {
+            app.clear_question_overlays();
             crate::logging::info(&format!(
                 "REMOTE_INTERRUPT_EVENT_RECEIVED kind=interrupted session={:?} current_message_id={:?} is_processing={} status={:?} streaming_text_bytes={} pending_soft_interrupts={} queued_messages={}",
                 app.remote_session_id,
@@ -1283,6 +1287,9 @@ pub(in crate::tui::app) fn handle_server_event(
                         id, app.current_message_id
                     ));
                 }
+            }
+            if completed_current_message {
+                app.clear_question_overlays();
             }
             completed_current_message || auto_poked
         }
@@ -1648,13 +1655,13 @@ pub(in crate::tui::app) fn handle_server_event(
             title,
             display_title,
         } => {
-            let quiet_new_session = app
-                .pending_new_session_rename
-                .as_ref()
-                .is_some_and(|pending| {
-                    pending.session_id.as_str() == session_id.as_str()
-                        && title.as_deref() == Some(pending.title.as_str())
-                });
+            let quiet_new_session =
+                app.pending_new_session_rename
+                    .as_ref()
+                    .is_some_and(|pending| {
+                        pending.session_id.as_str() == session_id.as_str()
+                            && title.as_deref() == Some(pending.title.as_str())
+                    });
             if quiet_new_session {
                 app.pending_new_session_rename = None;
             }
@@ -3363,6 +3370,37 @@ pub(in crate::tui::app) fn handle_server_event(
         ServerEvent::StdinRequest { .. } => {
             app.set_status_notice("⌨ Interactive terminal detected (command will timeout)");
             false
+        }
+        ServerEvent::UserQuestionRequest {
+            request_id,
+            tool_call_id,
+            intent,
+            root,
+            questions,
+        } => {
+            let clean = |text: String| {
+                crate::tui::app::input::strip_terminal_control_sequences(&text).into_owned()
+            };
+            let questions = questions
+                .into_iter()
+                .map(|mut node| {
+                    node.question = clean(node.question);
+                    node.header = node.header.map(clean);
+                    for option in &mut node.options {
+                        option.label = clean(option.label.clone());
+                        option.description = option.description.take().map(clean);
+                    }
+                    node
+                })
+                .collect();
+            app.open_question_request(crate::tui::question_overlay::QuestionRequestEnvelope {
+                request_id,
+                tool_call_id,
+                intent: clean(intent),
+                root,
+                questions,
+            });
+            true
         }
         ServerEvent::PeerUserMessage { content } => {
             app.handle_peer_user_message(&content);

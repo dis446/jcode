@@ -2624,6 +2624,17 @@ pub(super) fn handle_modal_key(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<bool> {
+    if let Some(overlay_cell) = app.question_overlay.as_ref() {
+        let outcome = overlay_cell.borrow_mut().handle_key(code, modifiers, None);
+        if !matches!(
+            outcome,
+            crate::tui::question_overlay::QuestionKeyOutcome::Handled
+        ) {
+            app.finish_question_overlay();
+        }
+        return Ok(true);
+    }
+
     if app.prompt_history_search.is_some() {
         app.handle_prompt_history_search_key(code, modifiers);
         return Ok(true);

@@ -101,6 +101,7 @@ mod onboarding_sim;
 mod productivity;
 mod at_file;
 mod prompt_history;
+mod question_overlay;
 mod remote;
 mod remote_header_hint;
 mod remote_notifications;
@@ -1897,6 +1898,11 @@ pub struct App {
     account_picker_overlay: Option<RefCell<super::account_picker::AccountPicker>>,
     /// Usage overlay (None = not visible)
     usage_overlay: Option<RefCell<super::usage_overlay::UsageOverlay>>,
+    /// Branching questionnaire dialog (None = not visible).
+    question_overlay: Option<RefCell<crate::tui::question_overlay::QuestionOverlay>>,
+    /// Questionnaires waiting behind the visible dialog.
+    pending_questions:
+        std::collections::VecDeque<crate::tui::question_overlay::QuestionRequestEnvelope>,
     /// Whether a usage refresh request is currently in flight.
     usage_report_refreshing: bool,
     usage_reset: usage_reset::ResetState,

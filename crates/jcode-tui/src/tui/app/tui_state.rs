@@ -2231,6 +2231,10 @@ impl crate::tui::TuiState for App {
         self.usage_overlay.as_ref()
     }
 
+    fn question_overlay(&self) -> Option<&RefCell<crate::tui::question_overlay::QuestionOverlay>> {
+        self.question_overlay.as_ref()
+    }
+
     fn working_dir(&self) -> Option<String> {
         self.session.working_dir.clone()
     }

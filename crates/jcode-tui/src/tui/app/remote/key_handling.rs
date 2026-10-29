@@ -216,6 +216,33 @@ async fn handle_remote_key_internal(
     let mut modifiers = modifiers;
     ctrl_bracket_fallback_to_esc(&mut code, &mut modifiers);
 
+    if let Some(overlay_cell) = app.question_overlay.as_ref() {
+        let (request_id, outcome) = {
+            let mut overlay = overlay_cell.borrow_mut();
+            let outcome = overlay.handle_key(code, modifiers, text_input.as_deref());
+            (overlay.request_id().to_string(), outcome)
+        };
+        match outcome {
+            crate::tui::question_overlay::QuestionKeyOutcome::Handled => return Ok(()),
+            crate::tui::question_overlay::QuestionKeyOutcome::Cancel(result)
+            | crate::tui::question_overlay::QuestionKeyOutcome::Submit(result) => {
+                match remote
+                    .send_user_question_response(&request_id, result)
+                    .await
+                {
+                    Ok(()) => app.finish_question_overlay(),
+                    Err(error) => {
+                        app.push_display_message(DisplayMessage::error(format!(
+                            "Failed to send questionnaire answer: {error}"
+                        )));
+                        app.set_status_notice("Failed to send answer");
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
+
     if app.handle_key_during_provider_failover(code) {
         return Ok(());
     }
@@ -1868,13 +1895,12 @@ pub(in crate::tui::app) async fn submit_remote_enter_input(
             // turn holds the agent lock). Keep the old view and defer the
             // rename until SessionId and Done prove the replacement exists.
             app.pending_new_session_rename = None;
-            app.pending_remote_new_session =
-                Some(crate::tui::app::PendingRemoteNewSession {
-                    clear_request_id,
-                    name,
-                    clear_done: false,
-                    confirmed_session_id: None,
-                });
+            app.pending_remote_new_session = Some(crate::tui::app::PendingRemoteNewSession {
+                clear_request_id,
+                name,
+                clear_done: false,
+                confirmed_session_id: None,
+            });
             app.set_status_notice("Starting new session...");
             return Ok(());
         }
