@@ -1,0 +1,679 @@
+From 1ee88989f34e09a76c7a87f97c4afc59e43fd053 Mon Sep 17 00:00:00 2001
+From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
+Date: Thu, 29 Oct 2026 15:31:22 +0800
+Subject: [PATCH] fix(tui): harden /new against rejected clears and stale state
+
+Wait for the Clear Done (and its SessionId) before resetting the remote view or sending RenameSession, so a rejected clear leaves the old transcript intact and never renames the old session. Correlate the clear with its request id, drop the pending operation on disconnect, and consume the Done as a control acknowledgement.
+
+Clear active skill, improve mode, and provider session state in the remote reset, refresh the terminal title and /resume cache for every local reset, and suppress the duplicate rename notice that /new used to print through the normal SessionRenamed path. RenameSession now returns its request id for correlation.
+
+Cover the deferred ack, Clear rejection, stale state, quiet rename, and /clear working-directory behavior.
+---
+ crates/jcode-tui/src/tui/app.rs               |  28 ++
+ .../jcode-tui/src/tui/app/commands_review.rs  |   4 +
+ crates/jcode-tui/src/tui/app/remote.rs        |  61 ++++-
+ .../src/tui/app/remote/key_handling.rs        |  39 ++-
+ .../src/tui/app/remote/server_events.rs       |  60 ++++-
+ .../src/tui/app/tests/new_session_command.rs  | 242 ++++++++++++++++--
+ crates/jcode-tui/src/tui/app/tui_lifecycle.rs |   4 +
+ crates/jcode-tui/src/tui/backend.rs           |   8 +-
+ 8 files changed, 406 insertions(+), 40 deletions(-)
+
+diff --git a/crates/jcode-tui/src/tui/app.rs b/crates/jcode-tui/src/tui/app.rs
+index 380a77adc..a1a399351 100644
+--- a/crates/jcode-tui/src/tui/app.rs
++++ b/crates/jcode-tui/src/tui/app.rs
+@@ -177,6 +177,28 @@ struct PendingSplitPrompt {
+     images: Vec<(String, String)>,
+ }
+ 
++/// A remote `/new` waiting for the server to confirm that `Clear` created a
++/// fresh session. The client must not reset its view or send the optional
++/// rename until that confirmation arrives, because the server can reject the
++/// clear while the previous session is busy.
++#[derive(Debug, Clone)]
++struct PendingRemoteNewSession {
++    clear_request_id: u64,
++    name: Option<String>,
++    clear_done: bool,
++    confirmed_session_id: Option<String>,
++}
++
++/// The rename request sent for a confirmed remote `/new`. The matching
++/// `SessionRenamed` event updates the title without printing the normal
++/// "Renamed session to ..." notice, which would read as a second command.
++#[derive(Debug, Clone)]
++struct PendingNewSessionRename {
++    request_id: u64,
++    session_id: String,
++    title: String,
++}
++
+ struct PendingLocalTransfer {
+     receiver: mpsc::Receiver<anyhow::Result<PreparedTransferSession>>,
+ }
+@@ -1761,6 +1783,12 @@ pub struct App {
+     pending_split_request: bool,
+     // Ask the followup loop to issue a transfer request once idle.
+     pending_transfer_request: bool,
++    // Remote `/new` sent Clear and is waiting for the server to confirm the
++    // replacement session before resetting the view or sending the rename.
++    pending_remote_new_session: Option<PendingRemoteNewSession>,
++    // The rename request for a confirmed remote `/new`, suppressed in the
++    // normal SessionRenamed presentation path.
++    pending_new_session_rename: Option<PendingNewSessionRename>,
+     // Local transfer preparation currently running in the background.
+     pending_local_transfer: Option<PendingLocalTransfer>,
+     // Queue mode: if true, Enter during processing queues; if false, Enter queues to send next
+diff --git a/crates/jcode-tui/src/tui/app/commands_review.rs b/crates/jcode-tui/src/tui/app/commands_review.rs
+index 4e9edb0b0..d66b8e9c8 100644
+--- a/crates/jcode-tui/src/tui/app/commands_review.rs
++++ b/crates/jcode-tui/src/tui/app/commands_review.rs
+@@ -340,6 +340,10 @@ pub(super) fn reset_current_session(app: &mut App) {
+     app.session = session;
+     clear_side_panel_for_new_session(app);
+     app.provider_session_id = None;
++    // The session id (and any name) changed, so both the terminal title and
++    // the /resume cache are stale even when `/new` was called without a name.
++    crate::tui::session_picker::invalidate_session_list_cache();
++    app.update_terminal_title();
+ }
+ 
+ fn observe_status_message(app: &App) -> String {
+diff --git a/crates/jcode-tui/src/tui/app/remote.rs b/crates/jcode-tui/src/tui/app/remote.rs
+index 5f2c6aa1f..7fbcb9938 100644
+--- a/crates/jcode-tui/src/tui/app/remote.rs
++++ b/crates/jcode-tui/src/tui/app/remote.rs
+@@ -2,8 +2,9 @@
+ 
+ use super::{
+     App, DisplayMessage, MAX_TURN_HOLD_SECS, PendingReloadReconnectStatus, ProcessingStatus,
+-    RemoteResumeActivity, SendAction, auth::auth_muse_helpers, ctrl_bracket_fallback_to_esc, input,
+-    parse_rate_limit_error, remote_notifications::present_swarm_notification,
++    PendingNewSessionRename, RemoteResumeActivity, SendAction, auth::auth_muse_helpers,
++    ctrl_bracket_fallback_to_esc, input, parse_rate_limit_error,
++    remote_notifications::present_swarm_notification,
+     spawn_in_new_terminal,
+ };
+ use crate::bus::BusEvent;
+@@ -1096,6 +1097,11 @@ pub(super) fn handle_disconnect(
+     reason: Option<RemoteDisconnectReason>,
+ ) {
+     app.revoke_cloud_environment();
++    // A `/new` whose Clear acknowledgement was lost cannot be completed on a
++    // fresh connection. Drop it so a stale pending rename can never target the
++    // session this client reconnects to.
++    app.pending_remote_new_session = None;
++    app.pending_new_session_rename = None;
+     let detail = if state.server_reload_in_progress {
+         "server reload in progress".to_string()
+     } else if let Some(reason) = reason.as_ref() {
+@@ -1377,6 +1383,7 @@ async fn dispatch_pending_server_reload(app: &mut App, remote: &mut RemoteConnec
+ }
+ 
+ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteConnection) {
++    process_pending_remote_new_session(app, remote).await;
+     if app.prepare_cloud_environment(remote).await.is_err() {
+         app.revoke_cloud_environment();
+         return;
+@@ -1737,6 +1744,56 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
+     }
+ }
+ 
++/// Finish a remote `/new` once the server confirms that `Clear` produced a
++/// replacement session. The reset and rename are deliberately deferred until
++/// then, because a rejected clear must leave the old transcript and session
++/// name untouched.
++pub(super) async fn process_pending_remote_new_session(
++    app: &mut App,
++    remote: &mut RemoteConnection,
++) {
++    if !app
++        .pending_remote_new_session
++        .as_ref()
++        .is_some_and(|pending| pending.clear_done)
++    {
++        return;
++    }
++    let Some(confirmed_session_id) = app
++        .pending_remote_new_session
++        .as_ref()
++        .and_then(|pending| pending.confirmed_session_id.clone())
++    else {
++        return;
++    };
++    let Some(pending) = app.pending_remote_new_session.take() else {
++        return;
++    };
++
++    key_handling::reset_remote_view_for_new_session(app);
++
++    let Some(name) = pending.name else {
++        app.set_status_notice("New session");
++        return;
++    };
++    match remote.rename_session(Some(name.clone())).await {
++        Ok(request_id) => {
++            app.pending_new_session_rename = Some(PendingNewSessionRename {
++                request_id,
++                session_id: confirmed_session_id,
++                title: name.clone(),
++            });
++            app.set_status_notice(format!("New session: {name}"));
++        }
++        Err(error) => {
++            app.push_display_message(DisplayMessage::error(format!(
++                "Failed to name new session: {error}"
++            )));
++            app.set_status_notice("New session");
++        }
++    }
++}
++
+ /// Run the oldest command queued with Ctrl+Enter through the same path as a
+ /// plain Enter, so it behaves exactly as if the user typed it now. One per
+ /// call: if it starts a turn, the rest wait for that turn to end.
+diff --git a/crates/jcode-tui/src/tui/app/remote/key_handling.rs b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
+index 634cd251b..85942a482 100644
+--- a/crates/jcode-tui/src/tui/app/remote/key_handling.rs
++++ b/crates/jcode-tui/src/tui/app/remote/key_handling.rs
+@@ -17,7 +17,7 @@ pub(in crate::tui::app) use update::{
+ /// Drop every trace of the replaced conversation after the daemon created a
+ /// fresh session (`/clear` and `/new`). Side panel pages and diagrams belong
+ /// to the discarded transcript, so they must not survive the swap (#605).
+-fn reset_remote_view_for_new_session(app: &mut App) {
++pub(super) fn reset_remote_view_for_new_session(app: &mut App) {
+     app.clear_provider_messages();
+     app.clear_display_messages();
+     app.queued_messages.clear();
+@@ -32,6 +32,14 @@ fn reset_remote_view_for_new_session(app: &mut App) {
+     app.swarm_plan_version = None;
+     app.swarm_plan_swarm_id = None;
+     app_mod::commands_review::clear_side_panel_for_new_session(app);
++    // One-shot skill and improve selections belong to the discarded session.
++    // Remote turns forward `active_skill`, so leaving it set would silently
++    // inject the old skill into the first prompt of the new session.
++    app.active_skill = None;
++    app.improve_mode = None;
++    app.session.improve_mode = None;
++    app.provider_session_id = None;
++    app.session.provider_session_id = None;
+     app.is_processing = false;
+     app.status = ProcessingStatus::Idle;
+ }
+@@ -1847,18 +1855,27 @@ pub(in crate::tui::app) async fn submit_remote_enter_input(
+                 ));
+                 return Ok(());
+             }
++            if app.pending_remote_new_session.is_some() {
++                app.push_display_message(DisplayMessage::error(
++                    "A new session is already starting.".to_string(),
++                ));
++                return Ok(());
++            }
+             let name = trimmed.strip_prefix("/new").unwrap_or_default().trim();
+             let name = (!name.is_empty()).then(|| name.to_string());
+-            remote.clear().await?;
+-            reset_remote_view_for_new_session(app);
+-            if let Some(name) = name {
+-                // Clear and rename travel on the same connection, so the
+-                // daemon applies the name to the fresh session.
+-                remote.rename_session(Some(name.clone())).await?;
+-                app.set_status_notice(format!("New session: {name}"));
+-            } else {
+-                app.set_status_notice("New session");
+-            }
++            let clear_request_id = remote.clear().await?;
++            // The server can reject Clear (for example while another client's
++            // turn holds the agent lock). Keep the old view and defer the
++            // rename until SessionId and Done prove the replacement exists.
++            app.pending_new_session_rename = None;
++            app.pending_remote_new_session =
++                Some(crate::tui::app::PendingRemoteNewSession {
++                    clear_request_id,
++                    name,
++                    clear_done: false,
++                    confirmed_session_id: None,
++                });
++            app.set_status_notice("Starting new session...");
+             return Ok(());
+         }
+ 
+diff --git a/crates/jcode-tui/src/tui/app/remote/server_events.rs b/crates/jcode-tui/src/tui/app/remote/server_events.rs
+index bb3fc7085..56d93a18b 100644
+--- a/crates/jcode-tui/src/tui/app/remote/server_events.rs
++++ b/crates/jcode-tui/src/tui/app/remote/server_events.rs
+@@ -453,6 +453,19 @@ pub(in crate::tui::app) fn handle_server_event(
+         app.usage_reset.refresh_usage = true;
+         return true;
+     }
++    if let ServerEvent::Done { id } = &event
++        && app
++            .pending_remote_new_session
++            .as_ref()
++            .is_some_and(|pending| pending.clear_request_id == *id)
++    {
++        if let Some(pending) = app.pending_remote_new_session.as_mut() {
++            pending.clear_done = true;
++        }
++        // Control acknowledgement, not a turn: the followup pass finishes the
++        // reset and rename once both SessionId and Done have arrived.
++        return false;
++    }
+ 
+     if let ServerEvent::Error { id, message, .. } = &event
+         && app.usage_reset.invalidate_requests.remove(id).is_some()
+@@ -1278,6 +1291,33 @@ pub(in crate::tui::app) fn handle_server_event(
+             retry_after_secs,
+             ..
+         } => {
++            if app
++                .pending_remote_new_session
++                .as_ref()
++                .is_some_and(|pending| pending.clear_request_id == id)
++            {
++                // The daemon kept the previous session. Do not reset the view
++                // or send the rename, and do not run the turn-error recovery
++                // below (it would treat the busy hint as a rate limit).
++                app.pending_remote_new_session = None;
++                app.push_display_message(DisplayMessage::error(format!(
++                    "Cannot start a new session: {message}"
++                )));
++                app.set_status_notice("New session failed");
++                return false;
++            }
++            if app
++                .pending_new_session_rename
++                .as_ref()
++                .is_some_and(|pending| pending.request_id == id)
++            {
++                app.pending_new_session_rename = None;
++                app.push_display_message(DisplayMessage::error(format!(
++                    "Failed to name new session: {message}"
++                )));
++                app.set_status_notice("New session");
++                return false;
++            }
+             if app.pending_agent_model_request_id == Some(id) {
+                 app.pending_agent_model_request_id = None;
+                 app.push_display_message(DisplayMessage::error(format!(
+@@ -1580,6 +1620,9 @@ pub(in crate::tui::app) fn handle_server_event(
+             false
+         }
+         ServerEvent::SessionId { session_id } => {
++            if let Some(pending) = app.pending_remote_new_session.as_mut() {
++                pending.confirmed_session_id = Some(session_id.clone());
++            }
+             if app.remote_session_id.as_deref() != Some(session_id.as_str()) {
+                 app.remote_available_service_tiers = None;
+             }
+@@ -1604,6 +1647,16 @@ pub(in crate::tui::app) fn handle_server_event(
+             title,
+             display_title,
+         } => {
++            let quiet_new_session = app
++                .pending_new_session_rename
++                .as_ref()
++                .is_some_and(|pending| {
++                    pending.session_id.as_str() == session_id.as_str()
++                        && title.as_deref() == Some(pending.title.as_str())
++                });
++            if quiet_new_session {
++                app.pending_new_session_rename = None;
++            }
+             crate::tui::session_picker::invalidate_session_list_cache();
+             let active_session_id = app
+                 .remote_session_id
+@@ -1619,7 +1672,12 @@ pub(in crate::tui::app) fn handle_server_event(
+                     app.session.title = Some(display_title.clone());
+                 }
+                 app.update_terminal_title();
+-                if title.is_some() {
++                if quiet_new_session {
++                    // `/new` already announced the new session. Keep that
++                    // presentation instead of adding a second "Renamed..."
++                    // notice to the fresh transcript.
++                    app.set_status_notice(format!("New session: {display_title}"));
++                } else if title.is_some() {
+                     app.push_display_message(DisplayMessage::system(format!(
+                         "Renamed session to {}.",
+                         display_title
+diff --git a/crates/jcode-tui/src/tui/app/tests/new_session_command.rs b/crates/jcode-tui/src/tui/app/tests/new_session_command.rs
+index 56e084a0f..0708c0a4e 100644
+--- a/crates/jcode-tui/src/tui/app/tests/new_session_command.rs
++++ b/crates/jcode-tui/src/tui/app/tests/new_session_command.rs
+@@ -19,6 +19,40 @@ fn side_panel_snapshot_with_one_page() -> crate::side_panel::SidePanelSnapshot {
+     }
+ }
+ 
++fn read_request<R: tokio::io::AsyncRead + Unpin>(
++    rt: &tokio::runtime::Runtime,
++    reader: &mut BufReader<R>,
++) -> crate::protocol::Request {
++    let line = rt.block_on(async {
++        let mut line = String::new();
++        tokio::time::timeout(
++            std::time::Duration::from_secs(2),
++            reader.read_line(&mut line),
++        )
++        .await
++        .expect("request should arrive")
++        .expect("request should be readable");
++        line
++    });
++    serde_json::from_str(&line).expect("request should deserialize")
++}
++
++fn no_request_within<R: tokio::io::AsyncRead + Unpin>(
++    rt: &tokio::runtime::Runtime,
++    reader: &mut BufReader<R>,
++    millis: u64,
++) -> bool {
++    rt.block_on(async {
++        let mut line = String::new();
++        tokio::time::timeout(
++            std::time::Duration::from_millis(millis),
++            reader.read_line(&mut line),
++        )
++        .await
++    })
++    .is_err()
++}
++
+ #[test]
+ fn local_new_starts_fresh_session_with_name() {
+     let mut app = create_test_app();
+@@ -91,6 +125,21 @@ fn local_new_clears_side_panel_pages() {
+     assert!(app.side_panel.focused_page_id.is_none());
+ }
+ 
++#[test]
++fn local_clear_preserves_working_dir() {
++    let mut app = create_test_app();
++    let old_id = app.session.id.clone();
++    app.session.working_dir = Some("/tmp/clear-session-work".to_string());
++
++    assert!(super::commands::handle_session_command(&mut app, "/clear"));
++
++    assert_ne!(app.session.id, old_id);
++    assert_eq!(
++        app.session.working_dir.as_deref(),
++        Some("/tmp/clear-session-work")
++    );
++}
++
+ #[test]
+ fn remote_new_clears_side_panel_pages() {
+     let mut app = create_test_app();
+@@ -106,6 +155,27 @@ fn remote_new_clears_side_panel_pages() {
+     rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+         .expect("remote /new should succeed");
+ 
++    app.handle_server_event(
++        crate::protocol::ServerEvent::SessionId {
++            session_id: "session_after_new".to_string(),
++        },
++        &mut remote,
++    );
++    app.handle_server_event(
++        crate::protocol::ServerEvent::Done {
++            id: app
++                .pending_remote_new_session
++                .as_ref()
++                .expect("pending /new should exist")
++                .clear_request_id,
++        },
++        &mut remote,
++    );
++    rt.block_on(super::remote::process_pending_remote_new_session(
++        &mut app,
++        &mut remote,
++    ));
++
+     assert!(!app.side_panel.has_pages());
+     assert!(app.side_panel.focused_page_id.is_none());
+ }
+@@ -167,7 +237,7 @@ fn remote_new_refuses_while_processing() {
+ }
+ 
+ #[test]
+-fn remote_new_sends_clear_then_rename() {
++fn remote_new_waits_for_clear_confirmation_before_resetting() {
+     let mut app = create_test_app();
+     let rt = tokio::runtime::Runtime::new().unwrap();
+     let _guard = rt.enter();
+@@ -179,38 +249,164 @@ fn remote_new_sends_clear_then_rename() {
+     let mut reader = BufReader::new(reader);
+     remote.mark_history_loaded();
+     app.is_remote = true;
++    let old_id = app.session.id.clone();
++    app.push_display_message(DisplayMessage::system(
++        "old transcript".to_string(),
++    ));
++    app.active_skill = Some("old-skill".to_string());
++    app.improve_mode = Some(crate::tui::app::ImproveMode::ImproveRun);
++    app.session.improve_mode = Some(crate::session::SessionImproveMode::ImproveRun);
++    app.provider_session_id = Some("old-provider-session".to_string());
++    app.session.provider_session_id = Some("old-provider-session".to_string());
+     app.input = "/new My Session".to_string();
+     app.cursor_pos = app.input.len();
+ 
+     rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+         .expect("remote /new should succeed");
+ 
+-    let first = rt
+-        .block_on(async {
+-            let mut line = String::new();
+-            reader.read_line(&mut line).await?;
+-            Ok::<_, std::io::Error>(line)
+-        })
+-        .expect("clear request should be readable");
+-    let second = rt
+-        .block_on(async {
+-            let mut line = String::new();
+-            reader.read_line(&mut line).await?;
+-            Ok::<_, std::io::Error>(line)
+-        })
+-        .expect("rename request should be readable");
+-
+-    assert!(matches!(
+-        serde_json::from_str::<crate::protocol::Request>(&first)
+-            .expect("clear request should deserialize"),
+-        crate::protocol::Request::Clear { .. }
++    let clear = read_request(&rt, &mut reader);
++    let clear_id = match clear {
++        crate::protocol::Request::Clear { id } => id,
++        other => panic!("expected Clear, got {other:?}"),
++    };
++    assert!(
++        no_request_within(&rt, &mut reader, 250),
++        "rename must wait for the Clear acknowledgement"
++    );
++    assert_eq!(app.session.id, old_id);
++    assert!(
++        app.display_messages()
++            .iter()
++            .any(|message| message.content == "old transcript")
++    );
++    assert_eq!(
++        app.pending_remote_new_session
++            .as_ref()
++            .map(|pending| pending.clear_request_id),
++        Some(clear_id)
++    );
++
++    let confirmed_id = "session_after_new".to_string();
++    app.handle_server_event(
++        crate::protocol::ServerEvent::SessionId {
++            session_id: confirmed_id.clone(),
++        },
++        &mut remote,
++    );
++    assert!(
++        app.display_messages()
++            .iter()
++            .any(|message| message.content == "old transcript"),
++        "SessionId alone must not finish /new before the Clear Done arrives"
++    );
++    app.handle_server_event(
++        crate::protocol::ServerEvent::Done { id: clear_id },
++        &mut remote,
++    );
++    rt.block_on(super::remote::process_pending_remote_new_session(
++        &mut app,
++        &mut remote,
+     ));
+-    match serde_json::from_str::<crate::protocol::Request>(&second)
+-        .expect("rename request should deserialize")
+-    {
++
++    assert!(
++        !app.display_messages()
++            .iter()
++            .any(|message| message.content == "old transcript"),
++        "the confirmed clear must reset the old transcript"
++    );
++    assert_eq!(app.active_skill, None);
++    assert_eq!(app.improve_mode, None);
++    assert_eq!(app.session.improve_mode, None);
++    assert_eq!(app.provider_session_id, None);
++    assert_eq!(app.session.provider_session_id, None);
++    assert_eq!(
++        app.status_notice().as_deref(),
++        Some("New session: My Session")
++    );
++
++    match read_request(&rt, &mut reader) {
+         crate::protocol::Request::RenameSession { title, .. } => {
+             assert_eq!(title.as_deref(), Some("My Session"));
+         }
+         other => panic!("expected RenameSession, got {other:?}"),
+     }
++
++    app.handle_server_event(
++        crate::protocol::ServerEvent::SessionRenamed {
++            session_id: confirmed_id,
++            title: Some("My Session".to_string()),
++            display_title: "My Session".to_string(),
++        },
++        &mut remote,
++    );
++    assert_eq!(app.session.display_title(), Some("My Session"));
++    assert!(
++        !app.display_messages()
++            .iter()
++            .any(|message| message.content.contains("Renamed session")),
++        "the /new rename must not print a second rename notice"
++    );
++    assert_eq!(
++        app.status_notice().as_deref(),
++        Some("New session: My Session")
++    );
++    assert!(app.pending_new_session_rename.is_none());
++}
++
++#[test]
++fn remote_new_clear_rejection_keeps_old_view_and_sends_no_rename() {
++    let mut app = create_test_app();
++    let rt = tokio::runtime::Runtime::new().unwrap();
++    let _guard = rt.enter();
++    let mut remote = crate::tui::backend::RemoteConnection::dummy();
++    let peer = remote
++        .take_dummy_peer()
++        .expect("dummy remote should retain peer stream");
++    let (reader, _writer) = peer.into_split();
++    let mut reader = BufReader::new(reader);
++    remote.mark_history_loaded();
++    app.is_remote = true;
++    let old_id = app.session.id.clone();
++    app.push_display_message(DisplayMessage::system(
++        "old transcript".to_string(),
++    ));
++    app.input = "/new Rejected".to_string();
++    app.cursor_pos = app.input.len();
++
++    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
++        .expect("remote /new should send Clear");
++
++    let clear_id = match read_request(&rt, &mut reader) {
++        crate::protocol::Request::Clear { id } => id,
++        other => panic!("expected Clear, got {other:?}"),
++    };
++    app.handle_server_event(
++        crate::protocol::ServerEvent::Error {
++            id: clear_id,
++            message:
++                "Cannot handle clear while the session is busy. Try again after the current turn finishes."
++                    .to_string(),
++            retry_after_secs: Some(1),
++        },
++        &mut remote,
++    );
++
++    assert_eq!(app.session.id, old_id);
++    assert!(
++        app.display_messages()
++            .iter()
++            .any(|message| message.content == "old transcript"),
++        "a rejected clear must not blank the old transcript"
++    );
++    assert!(app.pending_remote_new_session.is_none());
++    assert_eq!(app.status_notice().as_deref(), Some("New session failed"));
++    assert!(
++        app.display_messages()
++            .iter()
++            .any(|message| message.content.contains("Cannot start a new session"))
++    );
++    assert!(
++        no_request_within(&rt, &mut reader, 250),
++        "a rejected clear must not send RenameSession"
++    );
+ }
+diff --git a/crates/jcode-tui/src/tui/app/tui_lifecycle.rs b/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
+index 4e94682a1..241a074a1 100644
+--- a/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
++++ b/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
+@@ -665,6 +665,8 @@ impl App {
+             pending_split_started_at: None,
+             pending_split_request: false,
+             pending_transfer_request: false,
++            pending_remote_new_session: None,
++            pending_new_session_rename: None,
+             pending_local_transfer: None,
+             queue_mode: display.queue_mode,
+             auto_server_reload: display.auto_server_reload,
+@@ -1159,6 +1161,8 @@ impl App {
+             pending_split_started_at: None,
+             pending_split_request: false,
+             pending_transfer_request: false,
++            pending_remote_new_session: None,
++            pending_new_session_rename: None,
+             pending_local_transfer: None,
+             queue_mode: display.queue_mode,
+             auto_server_reload: display.auto_server_reload,
+diff --git a/crates/jcode-tui/src/tui/backend.rs b/crates/jcode-tui/src/tui/backend.rs
+index 720a244cb..114415845 100644
+--- a/crates/jcode-tui/src/tui/backend.rs
++++ b/crates/jcode-tui/src/tui/backend.rs
+@@ -1000,13 +1000,15 @@ impl RemoteConnection {
+         Ok(id)
+     }
+ 
+-    pub async fn rename_session(&mut self, title: Option<String>) -> Result<()> {
++    pub async fn rename_session(&mut self, title: Option<String>) -> Result<u64> {
++        let id = self.next_request_id;
+         let request = Request::RenameSession {
+-            id: self.next_request_id,
++            id,
+             title,
+         };
+         self.next_request_id += 1;
+-        self.send_request(request).await
++        self.send_request(request).await?;
++        Ok(id)
+     }
+ 
+     /// Inject externally transcribed text into the active remote TUI session.
+-- 
+2.56.0
+

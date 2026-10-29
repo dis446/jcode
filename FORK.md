@@ -47,7 +47,7 @@ pin, the config and the install entry point.
 | -- | ----- | ------ | ---- | ---------------------- | ----- | ---- | ------------ |
 | C1 | Native `@file` picker (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [patches/](patches/) (`git format-patch upstream/master..HEAD`) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
 | C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tool-core`: `lib.rs` (`Tool::is_project_tool` default). `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir` + `_with_global`), `server/client_session.rs` (subscribe + two resume paths), `server/headless.rs`, `server.rs`, `server/worker_revive.rs`. Root `src/cli/commands.rs`. New: `tool/project.rs`, `docs/PROJECT_TOOLS.md`. Project registration is independent of MCP and runs after the fixed MCP tools at each session site. | [patches/](patches/) | [doc](docs/PROJECT_TOOLS.md) | yes (new module + thin hooks) |
-| C3 | `/new [name]` slash command (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.345-dev) | `jcode-tui`: `app/commands.rs` (`handle_session_command`), `app/commands_review.rs` (`reset_current_session` keeps working dir), `app/remote/key_handling.rs` (shared reset helper + `/new`), `app/state_ui_input_helpers.rs` (registry), `ui_overlays.rs` (help). New: `app/tests/new_session_command.rs` | [patches/](patches/) | n/a | yes (additive slash command) |
+| C3 | `/new [name]` slash command (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.345-dev) | `jcode-tui`: `app.rs` (pending new-session state), `app/tui_lifecycle.rs` (2 inits), `app/commands.rs` (`handle_session_command`), `app/commands_review.rs` (`reset_current_session` keeps working dir, refreshes title/cache), `app/remote.rs` (deferred clear completion), `app/remote/key_handling.rs` (deferred `/new`, stale-state reset), `app/remote/server_events.rs` (Clear Done/Error and quiet rename), `app/state_ui_input_helpers.rs` (registry), `tui/backend.rs` (`rename_session` returns request id), `ui_overlays.rs` (help). New: `app/tests/new_session_command.rs` | [patches/](patches/) | n/a | yes (additive slash command) |
 | C4 | Live provider credit chip (DeepSeek/Moonshot balance) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.356-dev) | `jcode-base`: `usage.rs` (`mod balance;` + re-export), `usage/api_keys.rs` (`configured_key` becomes `pub(super)`; the DeepSeek/Moonshot balance fetch+parse bodies move into `usage/balance.rs`, and `/usage` calls the same functions the chip does). `jcode-config-types`: `display.rs` (`provider_balance`). `jcode-tui`: `tui/mod.rs` (module + `TuiState::provider_balance_chip`), `app.rs` (module + field), `app/tui_lifecycle.rs` (2 inits), `app/tui_state.rs`, `app/local.rs`, `app/remote.rs`, `ui_input.rs` (`draw_status` right-aligned chip). New: `jcode-base/src/usage/balance.rs`, `tui/provider_balance.rs`, `app/provider_balance.rs` | [patches/](patches/) | n/a | yes (new modules + thin hooks) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
@@ -83,17 +83,30 @@ If upstream adds a new session setup path, add `register_project_tools_for_dir` 
 The 2026-10-29 fix added reload identity, stripped `intent`, honoured `JCODE_HOME`,
 decoupled project tools from every MCP opt-out, bounded the timeout around stdin, and
 made the global file default to session cwd.
-C3 verify: `cargo test -p jcode-tui --lib -- local_new remote_new new_is_registered`
-(10 tests: local `/new` and named, boundary rejection, name trimming, registry
-discovery, local/remote side-panel reset, local/remote busy refusal, and remote
-`Clear` then `RenameSession`). Runtime:
+C3 best-way check: upstream `new_terminal` and Alt+Space next-prompt routing
+open another session; `/clear` plus `/rename` needs two non-atomic commands and
+leaves the session briefly unnamed, and no config or skill can reset a session
+in place. Chosen layer: minimal additive fork code in the existing command
+handlers plus a shared reset helper.
+C3 verify: `cargo test -p jcode-tui --lib -- local_new remote_new new_is_registered local_clear_preserves`
+(12 tests: local named/unnamed, boundary rejection, name trimming, registry
+discovery, local/remote side-panel reset, `/clear` working dir, local/remote
+busy refusal, deferred Clear acknowledgement, Clear rejection with no rename,
+stale skill/improve state, and the quiet `/new` rename). Runtime:
 tmux harness confirms `/new` changes the session title/id, `/new named session`
 sets the title, `/resume` lists the named session, and `clear_done` logs a new id
 on every call. Busy `/new` is refused client-side before any request is sent.
+The 2026-10-29 review fix defers the remote reset and rename until the Clear
+`Done`; a rejected Clear keeps the old transcript and never sends
+`RenameSession`, remote reset clears skill/improve/provider state, and a named
+`/new` no longer prints a second rename notice.
 C3 conflict hints: the local handler sits beside `/clear` in
 `handle_session_command`; the remote handler sits beside `/clear` in
-`submit_remote_enter_input` and shares `reset_remote_view_for_new_session`. The
-registry and help entries are one line each.
+`submit_remote_enter_input` and shares `reset_remote_view_for_new_session`.
+The deferred path keys off the `Clear` request id in `ServerEvent::Done` and
+`ServerEvent::Error`; the pending fields are initialized in both
+`app/tui_lifecycle.rs` constructors. The registry and help entries are one line
+each.
 C4 verify: `cargo test -p jcode-base --lib usage::balance` (6: `/usage` rows
 asserted byte-identical for DeepSeek and Moonshot while the same response
 exposes the chip amount, string and numeric balances, malformed payloads error
