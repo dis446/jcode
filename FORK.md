@@ -55,8 +55,9 @@ C2 conflict hints: the single hook is the first statement of
 `Registry::register_mcp_tools_for_dir` in `tool/mod.rs`; if upstream splits MCP
 registration per transport, add the project-tools call to each path that receives a
 session `working_dir`. `tool/project.rs` is new and cannot conflict.
-C3 verify: `cargo test -p jcode-tui --lib -- local_new remote_new` (3 tests: local
-`/new`, local `/new <name>`, remote sends `Clear` then `RenameSession`). Runtime:
+C3 verify: `cargo test -p jcode-tui --lib -- local_new remote_new` (5 tests: local
+`/new`, local `/new <name>`, boundary rejection, name trimming, remote sends
+`Clear` then `RenameSession`). Runtime:
 tmux harness confirms `/new` changes the session title/id, `/new named session`
 sets the title, and `/resume` lists the named session.
 C3 conflict hints: the local handler sits beside `/clear` in

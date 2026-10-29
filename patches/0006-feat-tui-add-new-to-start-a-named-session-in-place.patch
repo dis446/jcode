@@ -1,7 +1,7 @@
 From 102e9d6274836e0af2707d67de77c6417e3c706e Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 13:21:08 +0800
-Subject: [PATCH] feat(tui): add /new to start a named session in place
+Subject: [PATCH 6/7] feat(tui): add /new to start a named session in place
 
 ---
  crates/jcode-tui/src/tui/app/commands.rs      | 22 +++++
