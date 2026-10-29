@@ -445,3 +445,12 @@ fn herdr_fast_path_assumes_kitty_when_env_is_masked() {
         );
     }
 }
+
+#[test]
+fn nested_multiplexer_term_blocks_herdr_assumption() {
+    assert!(term_is_nested_multiplexer(Some("tmux-256color")));
+    assert!(term_is_nested_multiplexer(Some("screen.xterm-256color")));
+    assert!(!term_is_nested_multiplexer(Some("xterm-256color")));
+    assert!(!term_is_nested_multiplexer(Some("xterm-kitty")));
+    assert!(!term_is_nested_multiplexer(None));
+}
