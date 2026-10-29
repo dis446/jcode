@@ -832,6 +832,12 @@ fn insert_input_text_with_undo(app: &mut App, text: &str, typed: bool) {
 
     app.reset_tab_completion();
     app.sync_model_picker_preview_from_input();
+    // CUSTOM (C1): typing drives the @file popup, paste cancels it.
+    if typed {
+        app.at_file_after_edit();
+    } else {
+        app.at_file_close();
+    }
 }
 
 pub(super) fn handle_text_input(app: &mut App, text: &str) -> bool {
@@ -2801,6 +2807,7 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
                 app.cursor_pos = prev;
                 app.reset_tab_completion();
                 app.sync_model_picker_preview_from_input();
+                app.at_file_after_edit(); // CUSTOM (C1)
             }
             true
         }
@@ -3115,6 +3122,11 @@ impl App {
 
         if is_next_prompt_new_session_hotkey(code, modifiers) {
             self.toggle_next_prompt_new_session_routing();
+            return Ok(());
+        }
+
+        // CUSTOM (C1): the @file popup, when visible, owns Up/Down/Tab/Enter/Esc.
+        if self.handle_at_file_key(code, modifiers) {
             return Ok(());
         }
 

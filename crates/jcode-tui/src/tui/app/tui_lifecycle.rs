@@ -721,6 +721,8 @@ impl App {
             last_overnight_card_refresh: None,
             workspace_client: crate::tui::workspace_client::WorkspaceClientState::default(),
             prompt_history_search: None,
+            at_file: None,
+            at_file_pending: None,
             persisted_prompt_history: None,
         };
 
@@ -1214,6 +1216,8 @@ impl App {
             last_overnight_card_refresh: None,
             workspace_client: crate::tui::workspace_client::WorkspaceClientState::default(),
             prompt_history_search: None,
+            at_file: None,
+            at_file_pending: None,
             persisted_prompt_history: None,
         };
 

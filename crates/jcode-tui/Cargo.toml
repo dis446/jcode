@@ -67,6 +67,8 @@ jcode-build-meta = { path = "../jcode-build-meta" }
 jcode-logging = { path = "../jcode-logging" }
 jcode-core = { path = "../jcode-core" }
 jcode-fuzzy = { path = "../jcode-fuzzy" }
+# CUSTOM (fork ledger C1): @file composer completion.
+jcode-at-file = { path = "../jcode-at-file" }
 jcode-config-types = { path = "../jcode-config-types" }
 jcode-selfdev-types = { path = "../jcode-selfdev-types" }
 jcode-session-types = { path = "../jcode-session-types" }

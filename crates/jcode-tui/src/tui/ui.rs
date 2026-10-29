@@ -3586,6 +3586,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     // over existing rows (blank space, pinned footer, or the transcript tail)
     // instead of reserving layout height and shoving everything around.
     input_ui::draw_command_suggestions_overlay(frame, app, chunks[7]);
+    input_ui::draw_at_file_overlay(frame, app, chunks[7]); // CUSTOM (C1)
 
     // Ctrl+R reverse prompt-history search overlay (drawn after the command
     // palette so it wins when both could be visible).

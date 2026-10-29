@@ -99,6 +99,7 @@ pub(crate) mod onboarding_graph;
 mod onboarding_repair;
 mod onboarding_sim;
 mod productivity;
+mod at_file;
 mod prompt_history;
 mod remote;
 mod remote_header_hint;
@@ -1877,6 +1878,9 @@ pub struct App {
     workspace_client: super::workspace_client::WorkspaceClientState,
     /// Reverse prompt-history search overlay state (Ctrl+R). None = closed.
     prompt_history_search: Option<prompt_history::PromptHistorySearchState>,
+    // CUSTOM (fork ledger C1): `@file` completion popup + in-flight search.
+    at_file: Option<at_file::AtFileState>,
+    at_file_pending: Option<at_file::AtFilePending>,
     /// Lazily-loaded persisted cross-session prompt history (oldest first,
     /// deduped). None until first use; see `prompt_history.rs`.
     persisted_prompt_history: Option<Vec<String>>,

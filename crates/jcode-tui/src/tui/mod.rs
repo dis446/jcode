@@ -870,6 +870,10 @@ pub trait TuiState {
     fn prompt_history_search(&self) -> Option<PromptHistorySearchView> {
         None
     }
+    /// CUSTOM (fork ledger C1): visible `@file` completion popup, if any.
+    fn at_file_view(&self) -> Option<AtFileView> {
+        None
+    }
     fn active_skill(&self) -> Option<String>;
     fn subagent_status(&self) -> Option<String>;
     /// Progress of a currently-running batch tool call.
@@ -1395,6 +1399,14 @@ pub enum PickerKind {
 pub struct PromptHistorySearchView {
     pub query: String,
     pub matches: Vec<String>,
+    pub selected: usize,
+}
+
+/// CUSTOM (fork ledger C1): render snapshot of the `@file` popup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtFileView {
+    /// (name, display path, is_dir)
+    pub rows: Vec<(String, String, bool)>,
     pub selected: usize,
 }
 
