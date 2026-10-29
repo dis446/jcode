@@ -1,7 +1,7 @@
 From fe16dfda553ca24ddceda16f51d91270d7842b1b Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 11:19:39 +0800
-Subject: [PATCH 1/8] feat(at-file): pure completion crate (prefix, score,
+Subject: [PATCH 1/4] feat(at-file): pure completion crate (prefix, score,
  walker) [C1 phase 1-2]
 
 ---

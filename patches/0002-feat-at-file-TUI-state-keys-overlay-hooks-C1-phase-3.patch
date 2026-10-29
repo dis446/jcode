@@ -1,7 +1,7 @@
 From 201afa7a8b57328b515d13b6e07c303977c947e0 Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 11:25:45 +0800
-Subject: [PATCH 2/8] feat(at-file): TUI state, keys, overlay, hooks [C1 phase
+Subject: [PATCH 2/4] feat(at-file): TUI state, keys, overlay, hooks [C1 phase
  3-6]
 
 ---
