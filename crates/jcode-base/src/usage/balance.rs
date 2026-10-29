@@ -1,16 +1,31 @@
-//! Compact provider credit balance for live UI surfaces.
+//! Provider credit balances, shared by `/usage` and the live status chip.
 //!
-//! `/usage` reports the full picture for every connected provider. A status
-//! chip only needs one number for the provider currently in use, so this
-//! module queries that provider's balance endpoint directly and reports
-//! "not available" (rather than zero) for providers that have no such API.
+//! `/usage` lists every connected provider and renders one row per balance
+//! field; the status chip only needs the remaining amount for the provider in
+//! use. Both read the same response through the same fetch and parse helpers
+//! here, so the chip can never disagree with `/usage` about a balance.
 
 use anyhow::{Context, Result};
 use std::time::Duration;
 
 use crate::provider_catalog::{self, OpenAiCompatibleProfile};
 
-const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
+const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// One provider balance response in both forms its consumers need: the exact
+/// rows `/usage` renders, and the numeric amount the status chip shows.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct BalanceSnapshot {
+    pub lines: Vec<(String, String)>,
+    /// `None` when the response carries no single remaining-credit number.
+    pub amount: Option<BalanceAmount>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct BalanceAmount {
+    pub currency: String,
+    pub amount: f64,
+}
 
 /// Remaining provider credit, rendered as a single UI row.
 #[derive(Debug, Clone, PartialEq)]
@@ -92,9 +107,6 @@ fn has_balance_endpoint(profile_id: &str) -> bool {
     matches!(profile_id, "deepseek" | "moonshotai")
 }
 
-type BalanceParser =
-    fn(&serde_json::Value, &OpenAiCompatibleProfile) -> Result<BalanceChip>;
-
 /// Fetch the live balance for one profile. `Ok(None)` means the provider has
 /// no balance API or no configured key, which is not an error.
 pub async fn fetch_balance(profile_id: &str) -> Result<Option<BalanceChip>> {
@@ -105,35 +117,146 @@ pub async fn fetch_balance(profile_id: &str) -> Result<Option<BalanceChip>> {
     else {
         return Ok(None);
     };
-    let client = crate::provider::shared_http_client();
-    let resolved = provider_catalog::resolve_openai_compatible_profile(*profile);
-    let base = resolved.api_base.trim_end_matches('/');
-
-    let (url, parser): (String, BalanceParser) = match profile.id {
-        "deepseek" => (
-            "https://api.deepseek.com/user/balance".to_string(),
-            parse_deepseek_balance,
-        ),
-        "moonshotai" => (format!("{base}/users/me/balance"), parse_moonshot_balance),
+    let snapshot = match profile.id {
+        "deepseek" => deepseek_snapshot(&api_key).await?,
+        "moonshotai" => {
+            let resolved = provider_catalog::resolve_openai_compatible_profile(*profile);
+            moonshot_snapshot(&api_key, &resolved.api_base).await?
+        }
         _ => return Ok(None),
     };
+    let Some(amount) = snapshot.amount else {
+        anyhow::bail!("no numeric balance in response");
+    };
+    Ok(Some(BalanceChip {
+        provider: profile.display_name.to_string(),
+        currency: amount.currency,
+        amount: amount.amount,
+    }))
+}
 
+async fn get_balance_json(url: &str, api_key: &str) -> Result<serde_json::Value> {
+    let client = crate::provider::shared_http_client();
     let response = client
-        .get(&url)
+        .get(url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Accept", "application/json")
         .timeout(HTTP_TIMEOUT)
         .send()
         .await
-        .with_context(|| format!("{} balance request failed", profile.display_name))?;
+        .context("balance request failed")?;
     if !response.status().is_success() {
-        anyhow::bail!("{} balance HTTP {}", profile.display_name, response.status());
+        anyhow::bail!("HTTP {}", response.status());
     }
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .context("invalid balance response")?;
-    parser(&json, profile).map(Some)
+    response.json().await.context("invalid balance response")
+}
+
+/// DeepSeek exposes a real balance endpoint for plain API keys.
+pub(super) async fn deepseek_snapshot(api_key: &str) -> Result<BalanceSnapshot> {
+    let json = get_balance_json("https://api.deepseek.com/user/balance", api_key).await?;
+    deepseek_snapshot_from_json(&json)
+}
+
+fn deepseek_snapshot_from_json(json: &serde_json::Value) -> Result<BalanceSnapshot> {
+    let mut lines = Vec::new();
+    if let Some(available) = json.get("is_available").and_then(|v| v.as_bool()) {
+        lines.push((
+            "Key status".to_string(),
+            if available {
+                "valid (balance available)".to_string()
+            } else {
+                "balance exhausted".to_string()
+            },
+        ));
+    }
+    let mut amount = None;
+    if let Some(infos) = json.get("balance_infos").and_then(|v| v.as_array()) {
+        for info in infos {
+            let currency = info.get("currency").and_then(|v| v.as_str()).unwrap_or("?");
+            let total = info
+                .get("total_balance")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let mut detail = format!("{} {}", total, currency);
+            let topped_up = info.get("topped_up_balance").and_then(|v| v.as_str());
+            let granted = info.get("granted_balance").and_then(|v| v.as_str());
+            if let (Some(topped_up), Some(granted)) = (topped_up, granted) {
+                detail.push_str(&format!(" ({} paid + {} granted)", topped_up, granted));
+            }
+            lines.push(("Balance".to_string(), detail));
+            // The chip shows the first account's remaining credit; `/usage`
+            // keeps listing every currency the endpoint reports.
+            if amount.is_none()
+                && let Some(value) = info.get("total_balance").and_then(number)
+            {
+                amount = Some(BalanceAmount {
+                    currency: currency.to_string(),
+                    amount: value,
+                });
+            }
+        }
+    }
+    if lines.is_empty() {
+        anyhow::bail!("no balance info in response");
+    }
+    Ok(BalanceSnapshot { lines, amount })
+}
+
+/// Moonshot exposes `GET /v1/users/me/balance` for plain API keys.
+pub(super) async fn moonshot_snapshot(api_key: &str, api_base: &str) -> Result<BalanceSnapshot> {
+    let base = api_base.trim_end_matches('/');
+    let json = get_balance_json(&format!("{base}/users/me/balance"), api_key).await?;
+    moonshot_snapshot_from_json(&json, api_base)
+}
+
+fn moonshot_snapshot_from_json(
+    json: &serde_json::Value,
+    api_base: &str,
+) -> Result<BalanceSnapshot> {
+    let data = json
+        .get("data")
+        .ok_or_else(|| anyhow::anyhow!("no balance data in response"))?;
+    // Moonshot reports the currency only through the account's endpoint, so
+    // derive it from the API host the profile actually points at.
+    let currency = if api_base.contains("moonshot.cn") {
+        "CNY"
+    } else {
+        "USD"
+    };
+
+    let mut lines = Vec::new();
+    let mut amount = None;
+    if let Some(available) = data.get("available_balance").and_then(|v| v.as_f64()) {
+        lines.push((
+            "Balance".to_string(),
+            format!("{:.2} {} available", available, currency),
+        ));
+        lines.push((
+            "Key status".to_string(),
+            if available > 0.0 {
+                "valid (balance available)".to_string()
+            } else {
+                "balance exhausted".to_string()
+            },
+        ));
+        amount = Some(BalanceAmount {
+            currency: currency.to_string(),
+            amount: available,
+        });
+    }
+    if let (Some(cash), Some(voucher)) = (
+        data.get("cash_balance").and_then(|v| v.as_f64()),
+        data.get("voucher_balance").and_then(|v| v.as_f64()),
+    ) {
+        lines.push((
+            "Balance breakdown".to_string(),
+            format!("{:.2} cash + {:.2} voucher {}", cash, voucher, currency),
+        ));
+    }
+    if lines.is_empty() {
+        anyhow::bail!("no balance fields in response");
+    }
+    Ok(BalanceSnapshot { lines, amount })
 }
 
 fn number(value: &serde_json::Value) -> Option<f64> {
@@ -142,55 +265,6 @@ fn number(value: &serde_json::Value) -> Option<f64> {
         serde_json::Value::String(text) => text.trim().parse::<f64>().ok(),
         _ => None,
     }
-}
-
-fn parse_deepseek_balance(
-    json: &serde_json::Value,
-    profile: &OpenAiCompatibleProfile,
-) -> Result<BalanceChip> {
-    let first = json
-        .get("balance_infos")
-        .and_then(|value| value.as_array())
-        .and_then(|infos| infos.first())
-        .ok_or_else(|| anyhow::anyhow!("no balance_infos in response"))?;
-    let amount = first
-        .get("total_balance")
-        .and_then(number)
-        .ok_or_else(|| anyhow::anyhow!("no numeric total_balance in response"))?;
-    let currency = first
-        .get("currency")
-        .and_then(|value| value.as_str())
-        .unwrap_or("USD");
-    Ok(BalanceChip {
-        provider: profile.display_name.to_string(),
-        currency: currency.to_string(),
-        amount,
-    })
-}
-
-fn parse_moonshot_balance(
-    json: &serde_json::Value,
-    profile: &OpenAiCompatibleProfile,
-) -> Result<BalanceChip> {
-    let data = json
-        .get("data")
-        .ok_or_else(|| anyhow::anyhow!("no balance data in response"))?;
-    let amount = data
-        .get("available_balance")
-        .and_then(number)
-        .ok_or_else(|| anyhow::anyhow!("no numeric available_balance in response"))?;
-    // Moonshot reports the currency only through the account's endpoint, so
-    // derive it from the API host the profile actually points at.
-    let currency = if profile.api_base.contains("moonshot.cn") {
-        "CNY"
-    } else {
-        "USD"
-    };
-    Ok(BalanceChip {
-        provider: profile.display_name.to_string(),
-        currency: currency.to_string(),
-        amount,
-    })
 }
 
 #[cfg(test)]
@@ -207,53 +281,96 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_balance_uses_total_and_reports_currency() {
-        let chip = parse_deepseek_balance(
-            &json!({"is_available": true, "balance_infos": [{"currency": "USD", "total_balance": "28.11", "granted_balance": "21.77", "topped_up_balance": "6.34"}]}),
-            deepseek(),
-        )
+    fn deepseek_snapshot_keeps_usage_rows_and_exposes_the_amount() {
+        let snapshot = deepseek_snapshot_from_json(&json!({
+            "is_available": true,
+            "balance_infos": [{
+                "currency": "USD",
+                "total_balance": "28.11",
+                "granted_balance": "21.77",
+                "topped_up_balance": "6.34"
+            }]
+        }))
         .unwrap();
+        // `/usage` renders these rows verbatim.
+        assert_eq!(
+            snapshot.lines,
+            vec![
+                ("Key status".to_string(), "valid (balance available)".to_string()),
+                (
+                    "Balance".to_string(),
+                    "28.11 USD (6.34 paid + 21.77 granted)".to_string()
+                ),
+            ]
+        );
+        let chip = BalanceChip {
+            provider: deepseek().display_name.to_string(),
+            currency: snapshot.amount.as_ref().unwrap().currency.clone(),
+            amount: snapshot.amount.as_ref().unwrap().amount,
+        };
         assert_eq!(chip.label(), "DeepSeek $28.11");
         assert!(!chip.is_low());
         assert!(!chip.is_exhausted());
     }
 
     #[test]
-    fn numeric_string_and_number_balances_both_parse() {
-        let from_string = parse_deepseek_balance(
-            &json!({"balance_infos": [{"currency": "USD", "total_balance": "0.00"}]}),
-            deepseek(),
-        )
+    fn numeric_and_string_balances_both_produce_an_amount() {
+        let from_string = deepseek_snapshot_from_json(&json!({
+            "balance_infos": [{"currency": "USD", "total_balance": "0.00"}]
+        }))
         .unwrap();
-        assert!(from_string.is_exhausted());
-        let from_number = parse_deepseek_balance(
-            &json!({"balance_infos": [{"currency": "USD", "total_balance": 2.5}]}),
-            deepseek(),
-        )
+        assert_eq!(from_string.amount.unwrap().amount, 0.0);
+
+        let from_number = deepseek_snapshot_from_json(&json!({
+            "balance_infos": [{"currency": "USD", "total_balance": 2.5}]
+        }))
         .unwrap();
-        assert!(from_number.is_low());
+        assert!(from_number.amount.unwrap().amount < 5.0);
     }
 
     #[test]
-    fn malformed_or_missing_balance_is_an_error_not_zero() {
-        assert!(parse_deepseek_balance(&json!({"is_available": true}), deepseek()).is_err());
-        assert!(
-            parse_deepseek_balance(
-                &json!({"balance_infos": [{"currency": "USD", "total_balance": "n/a"}]}),
-                deepseek()
-            )
-            .is_err()
+    fn missing_or_unparsable_balance_is_an_error_not_zero() {
+        // Key status alone still renders, exactly as `/usage` always has, but
+        // it carries no amount for the chip.
+        let status_only = deepseek_snapshot_from_json(&json!({"is_available": true})).unwrap();
+        assert!(status_only.amount.is_none());
+        assert_eq!(status_only.lines.len(), 1);
+        assert!(deepseek_snapshot_from_json(&json!({})).is_err());
+        let unparsable = deepseek_snapshot_from_json(&json!({
+            "balance_infos": [{"currency": "USD", "total_balance": "n/a"}]
+        }))
+        .unwrap();
+        assert!(unparsable.amount.is_none());
+        assert_eq!(unparsable.lines.len(), 1);
+        assert!(moonshot_snapshot_from_json(&json!({"data": {}}), "x").is_err());
+    }
+
+    #[test]
+    fn moonshot_snapshot_matches_usage_rows_and_endpoint_currency() {
+        let snapshot = moonshot_snapshot_from_json(
+            &json!({"data": {"available_balance": 120.0, "cash_balance": 100.0, "voucher_balance": 20.0}}),
+            "https://api.moonshot.cn/v1",
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot.lines,
+            vec![
+                (
+                    "Balance".to_string(),
+                    "120.00 CNY available".to_string()
+                ),
+                ("Key status".to_string(), "valid (balance available)".to_string()),
+                (
+                    "Balance breakdown".to_string(),
+                    "100.00 cash + 20.00 voucher CNY".to_string()
+                ),
+            ]
         );
-        assert!(parse_moonshot_balance(&json!({"data": {}}), moonshot()).is_err());
-    }
-
-    #[test]
-    fn moonshot_balance_reports_the_endpoint_currency() {
-        let mut profile = *moonshot();
-        profile.api_base = "https://api.moonshot.cn/v1";
-        let chip = parse_moonshot_balance(&json!({"data": {"available_balance": 120.0}}), &profile)
-            .unwrap();
-        assert_eq!(chip.label(), "Moonshot AI ¥120.00");
+        let amount = snapshot.amount.unwrap();
+        assert_eq!(
+            format_amount(&amount.currency, amount.amount),
+            "¥120.00"
+        );
     }
 
     #[test]
@@ -271,6 +388,7 @@ mod tests {
         );
         assert_eq!(balance_profile_for_label("Groq"), None);
         assert_eq!(balance_profile("kimi"), None);
+        assert_eq!(moonshot().id, "moonshotai");
     }
 
     #[tokio::test]
