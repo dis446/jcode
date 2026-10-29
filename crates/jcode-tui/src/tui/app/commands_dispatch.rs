@@ -150,8 +150,9 @@ pub(super) fn handle_ssh_unsupported_command(app: &mut App, input: &str) -> bool
 /// Returns whether the input contains a known slash command at a safe token
 /// boundary. This is intentionally registry-aware so paths and URLs remain
 /// ordinary prompt text.
-pub(super) fn contains_registered_slash_command(input: &str) -> bool {
-    let names: Vec<_> = super::registered_command_names().collect();
+pub(super) fn contains_registered_slash_command(app: &App, input: &str) -> bool {
+    let owned = app.known_command_names();
+    let names: Vec<&str> = owned.iter().map(String::as_str).collect();
     !super::slash_command_parser::find_known_commands(input, &names).is_empty()
 }
 
@@ -159,7 +160,8 @@ pub(super) fn contains_registered_slash_command(input: &str) -> bool {
 /// concerns (clearing the input line, telemetry) because those differ between
 /// the local and remote entry points.
 pub(super) fn dispatch_local_command(app: &mut App, trimmed: &str) -> bool {
-    let names: Vec<_> = super::registered_command_names().collect();
+    let owned = app.known_command_names();
+    let names: Vec<&str> = owned.iter().map(String::as_str).collect();
     let matches = super::slash_command_parser::find_known_commands(trimmed, &names);
     if matches.first().is_some_and(|command| command.start > 0) || matches.len() > 1 {
         return dispatch_command_sequence(app, trimmed, &matches);
@@ -248,6 +250,8 @@ fn dispatch_single_local_command(app: &mut App, trimmed: &str) -> bool {
         || super::auth::handle_auth_command(app, trimmed)
         || super::tui_lifecycle_runtime::handle_dev_command(app, trimmed)
         || app.handle_update_rehearsal_command(trimmed)
+        // Project commands run last so every built-in wins on a name clash.
+        || super::commands_project::handle_local(app, trimmed)
 }
 
 /// Environment-mode tests run in their own process, so parallel local-mode

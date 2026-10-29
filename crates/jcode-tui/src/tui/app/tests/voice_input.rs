@@ -106,8 +106,8 @@ fn voice_esc_passes_through_when_not_recording() {
 
 #[test]
 fn voice_input_help_and_command_are_registered() {
-    assert!(super::commands_dispatch::contains_registered_slash_command("/voice"));
     let mut app = create_test_app();
+    assert!(super::commands_dispatch::contains_registered_slash_command(&app, "/voice"));
     app.set_input_for_test("/voice extra");
     app.submit_input();
     let last = app.display_messages().last().expect("usage shown");

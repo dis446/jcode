@@ -337,6 +337,8 @@ impl App {
             input: String::new(),
             reset_hint_seen: RefCell::new(None),
             command_candidates_cache: RefCell::new(None),
+            project_commands_cache: RefCell::new(None),
+            pending_project_confirm: None,
             command_suggestions_cache: RefCell::new(None),
             command_suggestions_epoch: std::cell::Cell::new(0),
             cursor_pos: 0,
@@ -837,6 +839,8 @@ impl App {
             input: String::new(),
             reset_hint_seen: RefCell::new(None),
             command_candidates_cache: RefCell::new(None),
+            project_commands_cache: RefCell::new(None),
+            pending_project_confirm: None,
             command_suggestions_cache: RefCell::new(None),
             command_suggestions_epoch: std::cell::Cell::new(0),
             cursor_pos: 0,
@@ -1272,6 +1276,17 @@ impl App {
         self.status = ProcessingStatus::Sending;
         self.processing_started = Some(Instant::now());
         self.pending_turn = true;
+    }
+
+    /// Fill the composer without submitting. `--initial-message` uses this so
+    /// a spawned pane carries context and still makes no model call.
+    pub fn prefill_input(&mut self, message: String) {
+        if message.trim().is_empty() || !self.input.is_empty() {
+            return;
+        }
+        self.wake_idle_hibernation();
+        self.input = message;
+        self.cursor_pos = self.input.len();
     }
 
     /// Show the background-rendered local transcript once it is ready, unless

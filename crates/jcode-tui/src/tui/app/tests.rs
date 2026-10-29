@@ -1939,3 +1939,5 @@ include!("tests/kv_cache_provider_identity.rs");
 include!("tests/cache_retention_routes.rs");
 
 include!("tests/cache_prompt_accounting.rs");
+
+include!("tests/project_commands.rs");

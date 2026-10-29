@@ -3810,6 +3810,26 @@ impl App {
         *call_output_tokens_seen = output_tokens;
     }
 
+    /// Run a project command in this process (local app, not a remote client).
+    /// The result arrives as the same `InputShellCompleted` event that renders
+    /// `!cmd` output.
+    pub(super) fn run_local_project_shell(
+        &mut self,
+        resolved: &super::commands_project::ResolvedProjectCommand,
+    ) {
+        self.push_display_message(DisplayMessage::user(resolved.display.clone()));
+        self.set_status_notice(format!(
+            "Running local shell: {}",
+            truncate_str(&resolved.line, 48)
+        ));
+        spawn_input_shell_command_with(
+            self.session.id.clone(),
+            resolved.line.clone(),
+            resolved.cwd.clone(),
+            Some(resolved.timeout_secs),
+        );
+    }
+
     /// Submit input - just sets up message and flags, processing happens in next loop iteration
     pub(super) fn submit_input(&mut self) {
         let command = expand_paste_placeholders(self, &self.input)
@@ -3887,7 +3907,8 @@ impl App {
         let trimmed = input.trim();
         let handled = super::commands_dispatch::dispatch_local_command(self, trimmed);
         if handled {
-            let embedded = super::commands_dispatch::contains_registered_slash_command(trimmed);
+            let embedded =
+                super::commands_dispatch::contains_registered_slash_command(self, trimmed);
             if trimmed.starts_with('/') || embedded {
                 crate::telemetry::record_command_family(trimmed);
             }

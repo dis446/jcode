@@ -954,6 +954,18 @@ impl crate::tui::TuiState for App {
         }
     }
 
+    fn project_command_entries(&self) -> Vec<(String, String)> {
+        self.project_commands()
+            .iter()
+            .map(|command| {
+                (
+                    format!("/{}", command.name()),
+                    command.description().to_string(),
+                )
+            })
+            .collect()
+    }
+
     fn streaming_tokens(&self) -> (u64, u64) {
         (
             self.streaming.streaming_input_tokens,

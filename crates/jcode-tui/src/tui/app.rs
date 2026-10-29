@@ -63,6 +63,7 @@ mod catchup;
 mod commands;
 mod commit_log;
 pub(crate) use commit_log::CommitLogOverlay;
+mod at_file;
 mod cloud_environment;
 mod commands_cloud;
 mod commands_colors;
@@ -71,6 +72,7 @@ mod commands_dispatch;
 mod commands_improve;
 mod commands_overnight;
 mod commands_plan;
+mod commands_project;
 mod commands_remote;
 mod commands_review;
 mod conversation_state;
@@ -99,7 +101,6 @@ pub(crate) mod onboarding_graph;
 mod onboarding_repair;
 mod onboarding_sim;
 mod productivity;
-mod at_file;
 mod prompt_history;
 mod question_overlay;
 mod remote;
@@ -813,6 +814,12 @@ struct CommandCandidatesCache {
     candidates: Vec<(String, &'static str)>,
 }
 
+/// Project commands resolved for one session working directory.
+pub(crate) struct ProjectCommandCache {
+    working_dir: Option<std::path::PathBuf>,
+    commands: std::sync::Arc<Vec<crate::command::project::ProjectCommand>>,
+}
+
 /// Memoized result of [`App::command_suggestions`] for one exact input buffer.
 ///
 /// The suggestion list is read up to eight times per rendered frame (input
@@ -1023,6 +1030,11 @@ pub struct App {
     input: String,
     reset_hint_seen: RefCell<Option<(String, Instant)>>,
     command_candidates_cache: RefCell<Option<CommandCandidatesCache>>,
+    /// Project-defined slash commands for the session's current working dir.
+    /// Reloaded when that directory changes; nothing executes at load.
+    project_commands_cache: RefCell<Option<ProjectCommandCache>>,
+    /// A destructive project command waiting for `y`.
+    pending_project_confirm: Option<commands_project::ResolvedProjectCommand>,
     /// Per-input memo for `command_suggestions()`; see
     /// [`CommandSuggestionsCache`].
     command_suggestions_cache: RefCell<Option<CommandSuggestionsCache>>,

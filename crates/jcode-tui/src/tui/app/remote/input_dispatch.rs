@@ -183,6 +183,10 @@ pub(in crate::tui::app) async fn submit_remote_slash_input(
 ) -> Result<()> {
     let raw_input = prepared.raw_input.clone();
 
+    if super::super::commands_project::handle_remote(app, remote, prepared.expanded.trim()).await? {
+        return Ok(());
+    }
+
     if crate::tui::is_ssh_remote() {
         let trimmed = prepared.expanded.trim();
         if app_mod::commands_dispatch::handle_ssh_unsupported_command(app, trimmed) {
@@ -214,7 +218,7 @@ pub(in crate::tui::app) async fn submit_remote_slash_input(
     let is_command_shaped = trimmed == "/?"
         || (input::parse_dropped_paths(&raw_input).is_none()
             && (snapshot.resolve_invocation(&raw_input).is_some()
-                || app_mod::commands_dispatch::contains_registered_slash_command(trimmed)));
+                || app_mod::commands_dispatch::contains_registered_slash_command(app, trimmed)));
     if !is_command_shaped {
         return submit_prepared_remote_input(app, remote, prepared).await;
     }
@@ -470,6 +474,19 @@ async fn submit_remote_input_shell(
     raw_input: String,
     command: String,
 ) -> Result<()> {
+    run_remote_shell(app, remote, raw_input, command, None, None).await
+}
+
+/// Run a shell line on the daemon and mark the UI as processing it. Shared by
+/// `!cmd` and project commands, which additionally pass a cwd and deadline.
+pub(in crate::tui::app) async fn run_remote_shell(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    raw_input: String,
+    command: String,
+    cwd: Option<String>,
+    timeout_secs: Option<u64>,
+) -> Result<()> {
     app.commit_pending_streaming_assistant_message();
     app.push_display_message(DisplayMessage::user(raw_input));
 
@@ -481,7 +498,9 @@ async fn submit_remote_input_shell(
         return Ok(());
     }
 
-    let request_id = remote.send_input_shell(command.clone()).await?;
+    let request_id = remote
+        .send_input_shell_with(command.clone(), cwd, timeout_secs)
+        .await?;
     app.current_message_id = Some(request_id);
     app.is_processing = true;
     app.status = ProcessingStatus::Sending;

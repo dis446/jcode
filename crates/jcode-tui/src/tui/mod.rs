@@ -823,6 +823,8 @@ pub trait TuiState {
     fn status_detail(&self) -> Option<String>;
     fn mcp_servers(&self) -> Vec<(String, usize)>;
     fn available_skills(&self) -> Vec<String>;
+    /// Project-defined slash commands as `(name, description)` for `/help`.
+    fn project_command_entries(&self) -> Vec<(String, String)>;
     /// Authoritative active credential (OAuth vs API key) for a dual-auth
     /// provider, as resolved from the live provider / remote server rather than
     /// from the `JCODE_RUNTIME_PROVIDER` env var. The header must prefer this
