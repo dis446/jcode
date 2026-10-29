@@ -22,7 +22,7 @@ My personal fork of [jcode](https://github.com/1jehuang/jcode)
 
 ### `@file` completion in the composer
 
-The only change so far. Typing `@` in the TUI input opens an inline fuzzy file
+Typing `@` in the TUI input opens an inline fuzzy file
 picker, matching pi's behavior:
 
 - Type `@` followed by a partial name/path, e.g. `@src/ma` or `@README`.
@@ -36,5 +36,15 @@ picker, matching pi's behavior:
   completion of a plain (non-`@`) path token.
 - Implemented in `crates/jcode-at-file` (pure completion logic) plus the TUI
   overlay in `crates/jcode-tui/src/tui/ui_input/at_file.rs`.
+
+### `/new [name]`
+
+Starts a fresh session in place, like pi's `/new`, and optionally names it:
+
+- `/new` replaces the current conversation with a new empty session in the same
+  working directory.
+- `/new refactor auth` starts the session with the display name
+  `refactor auth`, so it is easy to find in `/resume`.
+- The previous session is closed and saved as usual.
 
 Everything else in this repository is upstream code.
