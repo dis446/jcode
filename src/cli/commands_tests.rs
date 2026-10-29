@@ -42,6 +42,32 @@ fn run_report_names_local_profile_instead_of_openrouter_slot() {
     );
 }
 
+#[test]
+fn run_resume_uses_the_saved_session_working_dir() {
+    let _guard = crate::storage::lock_test_env();
+    let _saved = SavedEnv::capture(&["JCODE_HOME"]);
+    let home = tempfile::TempDir::new().expect("tempdir");
+    crate::env::set_var("JCODE_HOME", home.path());
+    let project = tempfile::TempDir::new().expect("tempdir");
+
+    let mut session = crate::session::Session::create(None, None);
+    session.working_dir = Some(project.path().display().to_string());
+    session.save_prepared().expect("save session");
+
+    assert_eq!(
+        run_working_dir_for_resume(Some(&session.id)),
+        Some(project.path().to_path_buf())
+    );
+    assert_eq!(
+        run_working_dir_for_resume(Some("missing_session")),
+        std::env::current_dir().ok()
+    );
+    assert_eq!(
+        run_working_dir_for_resume(None),
+        std::env::current_dir().ok()
+    );
+}
+
 fn spawn_single_response_http_server(status: u16, body: &str) -> String {
     spawn_single_response_http_server_on_host("127.0.0.1", status, body)
 }

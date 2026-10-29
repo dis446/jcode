@@ -19,12 +19,21 @@ A project entry replaces a global entry with the same name. Missing or malformed
 files are ignored and never stop a session from starting. An unreadable file and
 each invalid entry are logged as warnings and skipped individually.
 
+The loader reads only regular files, up to 1 MiB per file. The merged set is
+capped at 128 tools. Descriptions are capped at 4 KiB and parameter schemas at
+32 KiB. Entries beyond a limit are skipped with a warning.
+
 Project tools are replaced on every session attach. Editing or deleting either
 file takes effect on the next attach. A session that changes its working
 directory drops the old directory's project tools and loads the new directory's.
+`jcode run --resume` uses the resumed session's saved working directory.
+Ambient scheduled sessions use their session directory. A session-less ambient
+cycle loads only the global file.
 
 A name that is already registered by something that is not a project tool
 (built-in, MCP, self-dev) is not overridden; the entry is skipped with a warning.
+If a dynamic MCP server connects later and announces the same name, the MCP tool
+replaces the project tool and jcode logs a warning.
 
 ## Format
 
@@ -54,6 +63,9 @@ A name that is already registered by something that is not a project tool
 | `cwd` | no | `project`: the project root for the repo file (the directory containing `.jcode`), or the jcode config directory for the global file (`$JCODE_HOME`, normally `~/.jcode`). `session`: the session working dir. Default: `session` for the global file, `project` for the project file. |
 | `env` | no | Extra environment variables for the command. |
 
+Unknown fields are rejected at both the file and tool level. A typo such as
+`timeout_sec` is an invalid entry, not a silent fallback.
+
 The tool input object is written to the command's stdin as one JSON line.
 jcode's generic `accept_large_output` flag is removed first. The generic
 `intent` display label is also removed, unless the declared `parameters` schema
@@ -61,8 +73,10 @@ has its own `intent` property.
 
 Exit 0 means success: stdout becomes the result, with stderr appended under
 `[stderr]` when present. A non-zero exit is a tool error carrying the captured
-output. A timeout is a tool error. Results are capped at 128 KiB; output beyond
-the cap is drained and discarded, not buffered in memory.
+output. On failure, stderr is shown first so a large stdout cannot hide the
+reason. A timeout is a tool error. A graceful shutdown cancels a running tool and
+kills its process. Results are capped at 128 KiB; output beyond the cap is drained
+and discarded, not buffered in memory.
 
 A relative `command[0]` resolves against the config file's root (its real path,
 so a symlinked `.jcode/tools.json` in a feature workspace runs the commands of

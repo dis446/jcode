@@ -411,11 +411,15 @@ impl AmbientRunnerHandle {
         session_id: &str,
     ) -> anyhow::Result<()> {
         let session = Session::load(session_id)?;
+        let project_working_dir = session.working_dir.as_ref().map(std::path::PathBuf::from);
         let cycle_provider = provider.fork();
         let registry = tool::Registry::new(cycle_provider.clone()).await;
         if session.is_canary {
             registry.register_selfdev_tools().await;
         }
+        registry
+            .register_project_tools_for_dir(project_working_dir)
+            .await;
 
         let mut agent = Agent::new(cycle_provider, registry);
         agent.set_debug(session.is_debug);
@@ -496,11 +500,15 @@ impl AmbientRunnerHandle {
         let child_session_id = child.id.clone();
         let child_is_canary = child.is_canary;
         let child_is_debug = child.is_debug;
+        let project_working_dir = child.working_dir.as_ref().map(std::path::PathBuf::from);
         let cycle_provider = provider.fork();
         let registry = tool::Registry::new(cycle_provider.clone()).await;
         if child_is_canary {
             registry.register_selfdev_tools().await;
         }
+        registry
+            .register_project_tools_for_dir(project_working_dir)
+            .await;
 
         let mut agent = Agent::new_with_session(cycle_provider, registry, child, None);
         agent.set_debug(child_is_debug);
@@ -967,6 +975,9 @@ impl AmbientRunnerHandle {
         let cycle_provider = provider.fork();
         let registry = tool::Registry::new(cycle_provider.clone()).await;
         registry.register_ambient_tools().await;
+        // A session-less ambient cycle has no project root. Load only the
+        // global tools file; a guessed process cwd would pick an unrelated repo.
+        registry.register_project_tools_for_dir(None).await;
 
         let mut agent = Agent::new(cycle_provider.clone(), registry);
         agent.set_debug(true);
