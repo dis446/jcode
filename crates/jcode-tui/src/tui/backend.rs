@@ -436,6 +436,7 @@ impl RemoteConnection {
             system_prompt: None,
             supports_pdf_panels: false,
             supports_user_response: false,
+            supports_user_question: true,
             supports_server_failover: false,
             supports_turn_identity: true,
             id: conn.next_request_id,
@@ -1123,6 +1124,21 @@ impl RemoteConnection {
             id: self.next_request_id,
             request_id: request_id.to_string(),
             input: input.to_string(),
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await
+    }
+
+    /// Send questionnaire answers back to a waiting tool.
+    pub async fn send_user_question_response(
+        &mut self,
+        request_id: &str,
+        result: crate::protocol::UserQuestionResult,
+    ) -> Result<()> {
+        let request = Request::UserQuestionResponse {
+            id: self.next_request_id,
+            request_id: request_id.to_string(),
+            result,
         };
         self.next_request_id += 1;
         self.send_request(request).await

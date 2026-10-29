@@ -632,7 +632,9 @@ async fn apply_terminal_event<B: Backend>(
         Some(Ok(Event::Paste(text))) => {
             input_attribution.event = Some(format!("paste:{}", text.len()));
             app.note_client_interaction();
-            app.handle_paste(text);
+            if !app.handle_question_paste(&text) {
+                app.handle_paste(text);
+            }
             needs_redraw = true;
         }
         Some(Ok(Event::Mouse(mouse))) => {
@@ -933,7 +935,9 @@ where
         }
         Some(Ok(Event::Paste(text))) => {
             app.note_client_interaction();
-            app.handle_paste(text);
+            if !app.handle_question_paste(&text) {
+                app.handle_paste(text);
+            }
             needs_redraw = true;
         }
         Some(Ok(Event::Mouse(mouse))) => {
@@ -1082,6 +1086,7 @@ pub(super) fn handle_disconnect(
     state: &mut RemoteRunState,
     reason: Option<RemoteDisconnectReason>,
 ) {
+    app.clear_question_overlays();
     app.revoke_cloud_environment();
     // A `/new` whose Clear acknowledgement was lost cannot be completed on a
     // fresh connection. Drop it so a stale pending rename can never target the
