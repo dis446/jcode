@@ -51,8 +51,9 @@ Starts a fresh session in place, like pi's `/new`, and optionally names it:
 ### Project-defined tools (`.jcode/tools.json`)
 
 A repository can declare local commands as native tools with their own names,
-without an MCP server. Loaded from `~/.jcode/tools.json` and
-`<working dir>/.jcode/tools.json`; the tool input is passed as JSON on stdin and
-stdout becomes the result. See [docs/PROJECT_TOOLS.md](docs/PROJECT_TOOLS.md).
+without an MCP server. Loaded from `$JCODE_HOME/tools.json` (normally
+`~/.jcode/tools.json`) and `<working dir>/.jcode/tools.json`, and replaced on
+every session attach; the tool input is passed as JSON on stdin and stdout
+becomes the result. See [docs/PROJECT_TOOLS.md](docs/PROJECT_TOOLS.md).
 
 Everything else in this repository is upstream code.
