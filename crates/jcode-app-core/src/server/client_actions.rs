@@ -194,6 +194,9 @@ pub(super) fn handle_close_applet(
 pub(super) fn handle_input_shell(
     id: u64,
     command: String,
+    cwd: Option<String>,
+    timeout_secs: Option<u64>,
+    session_id: String,
     agent: &Arc<Mutex<Agent>>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
 ) {
@@ -201,48 +204,115 @@ pub(super) fn handle_input_shell(
     let tx = client_event_tx.clone();
 
     crate::runtime_activity::spawn(async move {
-        let cwd = {
-            let agent_guard = agent.lock().await;
-            agent_guard.working_dir().map(|dir| dir.to_string())
-        };
-
-        let started = Instant::now();
-        let mut cmd = build_input_shell_command(&command);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if let Some(dir) = cwd.as_ref() {
-            cmd.current_dir(dir);
-        }
-
-        let result = match cmd.output().await {
-            Ok(output) => {
-                let (combined_output, truncated) =
-                    combine_input_shell_output(&output.stdout, &output.stderr);
-                crate::message::InputShellResult {
-                    command,
-                    cwd,
-                    output: combined_output,
-                    exit_code: output.status.code(),
-                    duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                    truncated,
-                    failed_to_start: false,
-                }
+        let cwd = match cwd {
+            Some(dir) => Some(dir),
+            None => {
+                let agent_guard = agent.lock().await;
+                agent_guard.working_dir().map(|dir| dir.to_string())
             }
-            Err(error) => crate::message::InputShellResult {
-                command,
-                cwd,
-                output: format!("Failed to run command: {}", error),
-                exit_code: None,
-                duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                truncated: false,
-                failed_to_start: true,
-            },
         };
+
+        let registration = crate::input_shell_registry::register(&session_id, id);
+        let result =
+            run_input_shell(command, cwd, timeout_secs, registration.cancel_handle()).await;
+        drop(registration);
 
         let _ = tx.send(ServerEvent::InputShellResult { result });
         let _ = tx.send(ServerEvent::Done { id });
     });
+}
+
+enum ShellOutcome {
+    Completed(std::io::Result<std::process::Output>),
+    TimedOut,
+    Cancelled,
+}
+
+/// Run one input-line shell command with an optional timeout and cancellation.
+///
+/// The child is spawned with `kill_on_drop`, so leaving the `select!` on a
+/// timeout or cancellation kills the process group's leader instead of
+/// abandoning it.
+pub(super) async fn run_input_shell(
+    command: String,
+    cwd: Option<String>,
+    timeout_secs: Option<u64>,
+    cancel: Arc<tokio::sync::Notify>,
+) -> crate::message::InputShellResult {
+    let started = Instant::now();
+    let mut cmd = build_input_shell_command(&command);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(dir) = cwd.as_ref() {
+        cmd.current_dir(dir);
+    }
+
+    let timeout = timeout_secs.map(std::time::Duration::from_secs);
+    let mut output = Box::pin(cmd.output());
+    let outcome = tokio::select! {
+        result = &mut output => ShellOutcome::Completed(result),
+        _ = cancel.notified() => ShellOutcome::Cancelled,
+        _ = wait_for_timeout(timeout) => ShellOutcome::TimedOut,
+    };
+    // Dropping the output future drops the child and, with `kill_on_drop`,
+    // terminates a command that outlived its timeout or cancellation.
+    drop(output);
+
+    let duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    match outcome {
+        ShellOutcome::Completed(Ok(output)) => {
+            let (combined_output, truncated) =
+                combine_input_shell_output(&output.stdout, &output.stderr);
+            crate::message::InputShellResult {
+                command,
+                cwd,
+                output: combined_output,
+                exit_code: output.status.code(),
+                duration_ms,
+                truncated,
+                failed_to_start: false,
+            }
+        }
+        ShellOutcome::Completed(Err(error)) => crate::message::InputShellResult {
+            command,
+            cwd,
+            output: format!("Failed to run command: {}", error),
+            exit_code: None,
+            duration_ms,
+            truncated: false,
+            failed_to_start: true,
+        },
+        ShellOutcome::TimedOut => crate::message::InputShellResult {
+            command,
+            cwd,
+            output: match timeout_secs {
+                Some(secs) => format!("Command timed out after {secs}s"),
+                None => "Command timed out".to_string(),
+            },
+            exit_code: None,
+            duration_ms,
+            truncated: false,
+            failed_to_start: false,
+        },
+        ShellOutcome::Cancelled => crate::message::InputShellResult {
+            command,
+            cwd,
+            output: "Command cancelled".to_string(),
+            exit_code: None,
+            duration_ms,
+            truncated: false,
+            failed_to_start: false,
+        },
+    }
+}
+
+async fn wait_for_timeout(timeout: Option<std::time::Duration>) {
+    match timeout {
+        Some(timeout) => tokio::time::sleep(timeout).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Routing for future workers is metadata, so it can be updated during a turn.
