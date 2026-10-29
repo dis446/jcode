@@ -331,108 +331,18 @@ async fn fetch_compatible_profile_report(
     report
 }
 
-/// DeepSeek exposes a real balance endpoint for plain API keys.
+/// DeepSeek exposes a real balance endpoint for plain API keys. Parsing lives
+/// in `usage::balance`, which the status chip reads too.
 async fn fetch_deepseek_balance(api_key: &str) -> Result<Vec<(String, String)>> {
-    let client = crate::provider::shared_http_client();
-    let response = client
-        .get("https://api.deepseek.com/user/balance")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Accept", "application/json")
-        .timeout(HTTP_TIMEOUT)
-        .send()
-        .await
-        .context("balance request failed")?;
-    if !response.status().is_success() {
-        anyhow::bail!("HTTP {}", response.status());
-    }
-    let json: serde_json::Value = response.json().await.context("invalid balance response")?;
-
-    let mut lines = Vec::new();
-    if let Some(available) = json.get("is_available").and_then(|v| v.as_bool()) {
-        lines.push((
-            "Key status".to_string(),
-            if available {
-                "valid (balance available)".to_string()
-            } else {
-                "balance exhausted".to_string()
-            },
-        ));
-    }
-    if let Some(infos) = json.get("balance_infos").and_then(|v| v.as_array()) {
-        for info in infos {
-            let currency = info.get("currency").and_then(|v| v.as_str()).unwrap_or("?");
-            let total = info
-                .get("total_balance")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let mut detail = format!("{} {}", total, currency);
-            let topped_up = info.get("topped_up_balance").and_then(|v| v.as_str());
-            let granted = info.get("granted_balance").and_then(|v| v.as_str());
-            if let (Some(topped_up), Some(granted)) = (topped_up, granted) {
-                detail.push_str(&format!(" ({} paid + {} granted)", topped_up, granted));
-            }
-            lines.push(("Balance".to_string(), detail));
-        }
-    }
-    if lines.is_empty() {
-        anyhow::bail!("no balance info in response");
-    }
-    Ok(lines)
+    Ok(super::balance::deepseek_snapshot(api_key).await?.lines)
 }
 
-/// Moonshot exposes `GET /v1/users/me/balance` for plain API keys.
+/// Moonshot exposes `GET /v1/users/me/balance` for plain API keys. Parsing
+/// lives in `usage::balance`, which the status chip reads too.
 async fn fetch_moonshot_balance(api_key: &str, api_base: &str) -> Result<Vec<(String, String)>> {
-    let base = api_base.trim_end_matches('/');
-    let currency = if base.contains("moonshot.cn") {
-        "CNY"
-    } else {
-        "USD"
-    };
-    let client = crate::provider::shared_http_client();
-    let response = client
-        .get(format!("{}/users/me/balance", base))
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Accept", "application/json")
-        .timeout(HTTP_TIMEOUT)
-        .send()
-        .await
-        .context("balance request failed")?;
-    if !response.status().is_success() {
-        anyhow::bail!("HTTP {}", response.status());
-    }
-    let json: serde_json::Value = response.json().await.context("invalid balance response")?;
-    let data = json
-        .get("data")
-        .ok_or_else(|| anyhow::anyhow!("no balance data in response"))?;
-
-    let mut lines = Vec::new();
-    if let Some(available) = data.get("available_balance").and_then(|v| v.as_f64()) {
-        lines.push((
-            "Balance".to_string(),
-            format!("{:.2} {} available", available, currency),
-        ));
-        lines.push((
-            "Key status".to_string(),
-            if available > 0.0 {
-                "valid (balance available)".to_string()
-            } else {
-                "balance exhausted".to_string()
-            },
-        ));
-    }
-    if let (Some(cash), Some(voucher)) = (
-        data.get("cash_balance").and_then(|v| v.as_f64()),
-        data.get("voucher_balance").and_then(|v| v.as_f64()),
-    ) {
-        lines.push((
-            "Balance breakdown".to_string(),
-            format!("{:.2} cash + {:.2} voucher {}", cash, voucher, currency),
-        ));
-    }
-    if lines.is_empty() {
-        anyhow::bail!("no balance fields in response");
-    }
-    Ok(lines)
+    Ok(super::balance::moonshot_snapshot(api_key, api_base)
+        .await?
+        .lines)
 }
 
 /// Kimi Code exposes per-window quota through the coding usage endpoint.
