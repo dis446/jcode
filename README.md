@@ -37,6 +37,14 @@ picker, matching pi's behavior:
 - Implemented in `crates/jcode-at-file` (pure completion logic) plus the TUI
   overlay in `crates/jcode-tui/src/tui/ui_input/at_file.rs`.
 
+### Project-defined tools (`.jcode/tools.json`)
+
+A repository can declare local commands as native tools with their own names,
+without an MCP server. Loaded from `$JCODE_HOME/tools.json` (normally
+`~/.jcode/tools.json`) and `<working dir>/.jcode/tools.json`, and replaced on
+every session attach; the tool input is passed as JSON on stdin and stdout
+becomes the result. See [docs/PROJECT_TOOLS.md](docs/PROJECT_TOOLS.md).
+
 ### `/new [name]`
 
 Starts a fresh session in place, like pi's `/new`, and optionally names it:
@@ -48,12 +56,35 @@ Starts a fresh session in place, like pi's `/new`, and optionally names it:
 - The previous session is closed and saved as usual.
 - `/new` is refused while a turn is running. Press Esc or run `/cancel` first.
 
-### Project-defined tools (`.jcode/tools.json`)
+### Live provider credit chip
 
-A repository can declare local commands as native tools with their own names,
-without an MCP server. Loaded from `$JCODE_HOME/tools.json` (normally
-`~/.jcode/tools.json`) and `<working dir>/.jcode/tools.json`, and replaced on
-every session attach; the tool input is passed as JSON on stdin and stdout
-becomes the result. See [docs/PROJECT_TOOLS.md](docs/PROJECT_TOOLS.md).
+The status line's right edge shows the remaining API credit for the provider in
+use, when that provider exposes a balance endpoint (DeepSeek and Moonshot AI):
+
+- `DeepSeek $28.11` normally, amber below 5, red at zero.
+- Polls once a minute with a 10 second deadline. A failed query retries after
+  two minutes and never blocks a turn or shows a fabricated balance.
+- Switching providers clears the old number immediately.
+- On by default. Disable with `[display] provider_balance = false`.
+
+### `ask_user_question`
+
+A tool that lets the model ask a branching questionnaire instead of guessing.
+The TUI renders a full-frame dialog with authored options, an optional typed
+answer on each question, and a review screen:
+
+- Questions form a tree. Each option can name its own `next`, and a node-level
+  `next` covers custom answers and options without a branch. Different answers
+  may converge on the same follow-up question.
+- No cap on question or option count. Validation rejects unknown targets,
+  unreachable nodes, and cycles (reported with their path). The dialog scrolls
+  instead of truncating.
+- Multi-select questions, optional descriptions, back navigation that restores
+  prior selections, and Shift+Enter for newlines in a typed answer.
+- Answers return to the model as structured JSON with the path taken;
+  cancellation is a normal result.
+- Available only in the TUI: headless runs, the SDK, the harness bridge, and
+  Desktop do not register it. See
+  [docs/ASK_USER_QUESTION.md](docs/ASK_USER_QUESTION.md).
 
 Everything else in this repository is upstream code.
