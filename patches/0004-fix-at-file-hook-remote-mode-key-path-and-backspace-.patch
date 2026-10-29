@@ -1,7 +1,7 @@
 From 9cd672dfd8ebab85c191267e7d1288c82f1cda2e Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 12:01:41 +0800
-Subject: [PATCH 4/8] fix(at-file): hook remote-mode key path and backspace
+Subject: [PATCH 4/4] fix(at-file): hook remote-mode key path and backspace
  [C1]
 
 ---

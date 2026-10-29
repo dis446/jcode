@@ -1,7 +1,7 @@
 From ca35140a847e53a225c4e0deea01cca4d79cf216 Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 11:28:38 +0800
-Subject: [PATCH 3/8] test(at-file): app-level key path tests [C1]
+Subject: [PATCH 3/4] test(at-file): app-level key path tests [C1]
 
 ---
  crates/jcode-tui/src/tui/app/at_file.rs       |   2 +-
