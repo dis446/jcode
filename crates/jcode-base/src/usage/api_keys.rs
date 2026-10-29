@@ -112,7 +112,10 @@ pub(super) fn enqueue_api_key_usage_tasks(
         }
 
         let source_key = format!("openai-compatible:{}", profile.id);
-        let has_balance_api = matches!(profile.id, "deepseek" | "moonshotai" | "kimi" | "zai");
+        let has_balance_api = matches!(
+            profile.id,
+            "deepseek" | "moonshotai" | "kimi" | "zai" | "opencode-go"
+        );
         // Only surface profiles jcode has actually used (or that expose a real
         // balance API); listing every configured-but-idle key is noise.
         let used_before = provider_activity::last_used_unix_secs(&source_key).is_some()
@@ -240,6 +243,20 @@ async fn fetch_compatible_profile_report(
                 }
             }
         }
+        "opencode-go" => {
+            if let Some(api_key) = configured_key(profile.api_key_env, profile.env_file) {
+                // The endpoint is unofficial but reports the same windows the
+                // web console shows. Parsing lives beside the chip's fetch so
+                // both surfaces always agree.
+                match super::balance::opencode_go_snapshot(&api_key).await {
+                    Ok(snapshot) if !snapshot.limits.is_empty() => limits.extend(snapshot.limits),
+                    Ok(_) => error = Some("no quota windows returned".to_string()),
+                    Err(e) => {
+                        extra_info.push(("Usage".to_string(), format!("unavailable ({})", e)))
+                    }
+                }
+            }
+        }
         "kimi" => {
             if let Some(api_key) = configured_key(profile.api_key_env, profile.env_file) {
                 match fetch_kimi_usage_limits(&api_key).await {
@@ -314,6 +331,7 @@ async fn fetch_compatible_profile_report(
     // quota (Kimi, a Z.ai Coding Plan key that returned windows, or a Muse
     // subscription, which is a flat-rate plan and not metered per token here).
     let plan_quota_shown = profile.id == "kimi"
+        || profile.id == "opencode-go"
         || profile.id == "muse-subscription"
         || (profile.id == "zai" && !limits.is_empty());
     if !plan_quota_shown {

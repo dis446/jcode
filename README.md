@@ -56,15 +56,23 @@ Starts a fresh session in place, like pi's `/new`, and optionally names it:
 - The previous session is closed and saved as usual.
 - `/new` is refused while a turn is running. Press Esc or run `/cancel` first.
 
-### Live provider credit chip
+### Live provider credit and quota chip
 
-The status line's right edge shows the remaining API credit for the provider in
-use, when that provider exposes a balance endpoint (DeepSeek and Moonshot AI):
+The status line's right edge shows the remaining credit or plan usage for the
+provider in use, when that provider exposes a metering endpoint:
 
-- `DeepSeek $28.11` normally, amber below 5, red at zero.
+- DeepSeek and Moonshot AI show remaining credit, such as `DeepSeek $28.11`.
+  The chip is amber below 5 and red at zero.
+- OpenCode Go shows its rolling, weekly, and monthly windows with reset
+  countdowns, such as
+  `OpenCode Go 5h 2% (58m) · 1w 20% (3d 6h) · 1mo 31% (15d)`. The values are
+  percent used; the chip is amber at 70% and red at 100%. Data comes from
+  `https://opencode.ai/zen/go/v1/usage`, an unofficial endpoint with no
+  documented public API.
+- `/usage` shows the same quota windows as bars with reset times.
 - Polls once a minute with a 10 second deadline. A failed query retries after
-  two minutes and never blocks a turn or shows a fabricated balance.
-- Switching providers clears the old number immediately.
+  two minutes and never blocks a turn or shows a fabricated number.
+- Switching providers clears the old chip immediately.
 - On by default. Disable with `[display] provider_balance = false`.
 
 ### `ask_user_question`

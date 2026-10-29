@@ -1,4 +1,5 @@
-//! Nonblocking provider credit chip rendered at the status line's right edge.
+//! Nonblocking provider credit / plan-quota chip rendered at the status
+//! line's right edge.
 //!
 //! The chip is UI-only telemetry: a failed query or a provider without a
 //! balance API never blocks a turn and never renders a fabricated balance.
@@ -7,7 +8,7 @@
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
-use crate::usage::BalanceChip;
+use crate::usage::{BalanceChip, LimitChip, ProviderChip};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(120);
@@ -29,12 +30,69 @@ impl Chip {
             exhausted: balance.is_exhausted(),
         }
     }
+
+    fn from_limits(limits: LimitChip) -> Self {
+        let low = limits.is_low();
+        let exhausted = limits.is_exhausted();
+        Self {
+            label: limits_label(&limits),
+            low,
+            exhausted,
+        }
+    }
+
+    fn from_provider(chip: ProviderChip) -> Self {
+        match chip {
+            ProviderChip::Balance(balance) => Self::from_balance(balance),
+            ProviderChip::Limits(limits) => Self::from_limits(limits),
+        }
+    }
+}
+
+/// Compact label for a rotating window name. The `/usage` overlay keeps the
+/// long form; the status line gets the shortest unambiguous one.
+fn window_short_name(name: &str) -> &str {
+    match name {
+        "5-hour" => "5h",
+        "Weekly" => "1w",
+        "Monthly" => "1mo",
+        other => other,
+    }
+}
+
+/// `OpenCode Go 5h 2% (58m) · 1w 20% (3d 6h) · 1mo 31% (15d)`.
+fn limits_label(limits: &LimitChip) -> String {
+    let windows = limits
+        .windows
+        .iter()
+        .map(|window| {
+            let reset = window
+                .resets_at
+                .as_deref()
+                .map(jcode_tui_usage_overlay::format_reset_time)
+                .filter(|reset| !reset.is_empty())
+                .map(|reset| format!(" ({reset})"))
+                .unwrap_or_default();
+            format!(
+                "{} {:.0}%{}",
+                window_short_name(&window.name),
+                window.usage_percent,
+                reset
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if windows.is_empty() {
+        limits.provider.clone()
+    } else {
+        format!("{} {}", limits.provider, windows)
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct Poller {
     profile: Option<String>,
-    pending: Option<oneshot::Receiver<Option<BalanceChip>>>,
+    pending: Option<oneshot::Receiver<Option<ProviderChip>>>,
     chip: Option<Chip>,
     next_poll: Option<Instant>,
 }
@@ -69,7 +127,7 @@ impl Poller {
         if let Some(receiver) = &mut self.pending {
             match receiver.try_recv() {
                 Ok(balance) => {
-                    self.chip = balance.map(Chip::from_balance);
+                    self.chip = balance.map(Chip::from_provider);
                     self.pending = None;
                     self.next_poll = Some(
                         now + if self.chip.is_some() {
@@ -96,24 +154,22 @@ impl Poller {
             let (sender, receiver) = oneshot::channel();
             self.pending = Some(receiver);
             runtime.spawn(async move {
-                let balance = match tokio::time::timeout(
-                    FETCH_DEADLINE,
-                    crate::usage::fetch_balance(&profile),
-                )
-                .await
-                {
-                    Ok(Ok(balance)) => balance,
-                    Ok(Err(error)) => {
-                        crate::logging::debug(&format!(
-                            "Provider balance unavailable: {error:#}"
-                        ));
-                        None
-                    }
-                    Err(_) => {
-                        crate::logging::debug("Provider balance query timed out");
-                        None
-                    }
-                };
+                let balance =
+                    match tokio::time::timeout(FETCH_DEADLINE, crate::usage::fetch_chip(&profile))
+                        .await
+                    {
+                        Ok(Ok(balance)) => balance,
+                        Ok(Err(error)) => {
+                            crate::logging::debug(&format!(
+                                "Provider balance unavailable: {error:#}"
+                            ));
+                            None
+                        }
+                        Err(_) => {
+                            crate::logging::debug("Provider balance query timed out");
+                            None
+                        }
+                    };
                 if sender.send(balance).is_err() {
                     crate::logging::debug("Discarded provider balance after poller was closed");
                 }
@@ -136,6 +192,24 @@ mod tests {
         }
     }
 
+    fn provider_chip(amount: f64, currency: &str) -> ProviderChip {
+        ProviderChip::Balance(chip(amount, currency))
+    }
+
+    fn limits_chip(windows: &[(&str, f32, Option<&str>)]) -> LimitChip {
+        LimitChip {
+            provider: "OpenCode Go".to_string(),
+            windows: windows
+                .iter()
+                .map(|(name, percent, resets_at)| crate::usage::UsageLimit {
+                    name: name.to_string(),
+                    usage_percent: *percent,
+                    resets_at: resets_at.map(|value| value.to_string()),
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn chip_reports_low_and_exhausted_balances() {
         let healthy = Chip::from_balance(chip(28.11, "USD"));
@@ -147,6 +221,34 @@ mod tests {
 
         let empty = Chip::from_balance(chip(0.0, "USD"));
         assert!(empty.low && empty.exhausted);
+    }
+
+    #[test]
+    fn quota_chip_lists_every_window_with_its_reset() {
+        let chip = Chip::from_limits(limits_chip(&[
+            ("5-hour", 2.0, None),
+            ("Weekly", 20.0, None),
+            ("Monthly", 31.0, None),
+        ]));
+        assert_eq!(chip.label, "OpenCode Go 5h 2% · 1w 20% · 1mo 31%");
+        assert!(!chip.low && !chip.exhausted);
+
+        let chip = Chip::from_limits(limits_chip(&[
+            ("5-hour", 2.0, Some("2099-01-01T00:00:00Z")),
+            ("Weekly", 20.0, Some("2099-01-03T00:00:00Z")),
+            ("Monthly", 31.0, Some("2099-02-01T00:00:00Z")),
+        ]));
+        assert!(chip.label.starts_with("OpenCode Go 5h 2% ("));
+        assert!(chip.label.contains(" · 1w 20% ("));
+        assert!(chip.label.contains(" · 1mo 31% ("));
+    }
+
+    #[test]
+    fn quota_chip_warns_at_seventy_and_exhausts_at_one_hundred() {
+        let warned = Chip::from_limits(limits_chip(&[("Weekly", 70.0, None)]));
+        assert!(warned.low && !warned.exhausted);
+        let exhausted = Chip::from_limits(limits_chip(&[("Monthly", 100.0, None)]));
+        assert!(exhausted.low && exhausted.exhausted);
     }
 
     #[test]
@@ -176,7 +278,7 @@ mod tests {
         // A stale in-flight query must not repopulate the chip for the new
         // provider.
         let (sender, receiver) = oneshot::channel();
-        sender.send(Some(chip(1.0, "USD"))).unwrap();
+        sender.send(Some(provider_chip(1.0, "USD"))).unwrap();
         poller.pending = Some(receiver);
         poller.refresh(Some("moonshotai"), true);
         assert!(poller.chip().is_none());
@@ -191,7 +293,7 @@ mod tests {
             ..Default::default()
         };
         let (sender, receiver) = oneshot::channel();
-        sender.send(Some(chip(0.0, "USD"))).unwrap();
+        sender.send(Some(provider_chip(0.0, "USD"))).unwrap();
         poller.pending = Some(receiver);
         assert!(poller.refresh(Some("deepseek"), true));
         let chip = poller.chip().unwrap();
