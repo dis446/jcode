@@ -1,7 +1,7 @@
 From 271582c132145e72ff8e4a91ec1c9f3bd2b29689 Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 13:34:29 +0800
-Subject: [PATCH 8/8] test(tui): cover /new discovery and side-panel reset
+Subject: [PATCH 08/10] test(tui): cover /new discovery and side-panel reset
 
 ---
  .../src/tui/app/tests/new_session_command.rs  | 54 +++++++++++++++++++
