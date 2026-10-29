@@ -636,6 +636,11 @@ async fn handle_remote_key_internal(
         }
     }
 
+    // CUSTOM (C1): the @file popup owns Up/Down/Tab/Enter/Esc while visible.
+    if app.handle_at_file_key(code, modifiers) {
+        return Ok(());
+    }
+
     if app.handle_command_suggestion_key(code, modifiers) {
         return Ok(());
     }
@@ -919,6 +924,7 @@ async fn handle_remote_key_internal(
                 app.cursor_pos = prev;
                 app.reset_tab_completion();
                 app.sync_model_picker_preview_from_input();
+                app.at_file_after_edit(); // CUSTOM (C1)
             }
         }
         KeyCode::Delete => {
