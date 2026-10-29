@@ -48,4 +48,11 @@ Starts a fresh session in place, like pi's `/new`, and optionally names it:
 - The previous session is closed and saved as usual.
 - `/new` is refused while a turn is running. Press Esc or run `/cancel` first.
 
+### Project-defined tools (`.jcode/tools.json`)
+
+A repository can declare local commands as native tools with their own names,
+without an MCP server. Loaded from `~/.jcode/tools.json` and
+`<working dir>/.jcode/tools.json`; the tool input is passed as JSON on stdin and
+stdout becomes the result. See [docs/PROJECT_TOOLS.md](docs/PROJECT_TOOLS.md).
+
 Everything else in this repository is upstream code.
