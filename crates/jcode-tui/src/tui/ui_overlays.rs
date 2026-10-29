@@ -507,6 +507,22 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     ));
     lines.push(help_entry("/quit", "Exit jcode"));
 
+    let project_commands = app.project_command_entries();
+    if !project_commands.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(separator());
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled(
+            "  Project commands",
+            section_style,
+        )));
+        lines.push(Line::from(""));
+        for (name, description) in &project_commands {
+            lines.push(help_entry(name, description));
+        }
+    }
+
     // The sections above are hand-curated for ordering, but they drift as
     // commands are added. Anything registered and not already shown gets listed
     // here so no working command is invisible in /help.
@@ -531,22 +547,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         lines.push(Line::from(""));
         for (name, desc) in uncovered {
             lines.push(help_entry(name, desc));
-        }
-    }
-
-    let project_commands = app.project_command_entries();
-    if !project_commands.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(separator());
-        lines.push(Line::from(""));
-
-        lines.push(Line::from(Span::styled(
-            "  Project commands",
-            section_style,
-        )));
-        lines.push(Line::from(""));
-        for (name, description) in &project_commands {
-            lines.push(help_entry(name, description));
         }
     }
 

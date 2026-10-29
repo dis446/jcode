@@ -39,6 +39,13 @@ impl App {
             .working_dir
             .as_deref()
             .map(std::path::PathBuf::from);
+        // A remote client's stub session has no working dir until the first
+        // History payload arrives. Loading now would resolve the wrong tree
+        // (or the global file only) and cache that miss; wait for the real
+        // directory instead.
+        if self.is_remote && working_dir.is_none() {
+            return std::sync::Arc::new(Vec::new());
+        }
         if let Some(cache) = self.project_commands_cache.borrow().as_ref()
             && cache.working_dir == working_dir
         {
