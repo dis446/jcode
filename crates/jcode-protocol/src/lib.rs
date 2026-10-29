@@ -351,6 +351,7 @@ impl AuthChanged {
 pub type ReloadRecoverySnapshot = jcode_selfdev_types::ReloadRecoveryDirective;
 
 mod wire;
+pub use jcode_tool_types::{QuestionAnswer, QuestionNode, QuestionOption, UserQuestionResult};
 pub use wire::{AccountUsageSnapshot, Request, ServerEvent, TurnIdentity};
 pub use wire::{SessionToolConfig, SessionToolDefinition};
 
@@ -854,6 +855,7 @@ impl Request {
             Request::InvalidateOpenAiUsage { id, .. } => *id,
             Request::InvalidateAnthropicUsage { id, .. } => *id,
             Request::StdinResponse { id, .. } => *id,
+            Request::UserQuestionResponse { id, .. } => *id,
             Request::AgentRegister { id, .. } => *id,
             Request::AgentTask { id, .. } => *id,
             Request::AgentCapabilities { id } => *id,

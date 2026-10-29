@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use jcode_agent_runtime::InterruptSignal;
 use jcode_message_types::ToolDefinition;
-use jcode_tool_types::ToolOutput;
+use jcode_tool_types::{QuestionNode, ToolOutput, UserQuestionResult};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -91,12 +91,42 @@ pub fn ensure_intent_in_schema(mut schema: Value) -> Value {
     schema
 }
 
-/// A request for stdin input from a running command.
-pub struct StdinInputRequest {
+/// A questionnaire sent by a tool to an interactive client.
+#[derive(Debug, Clone)]
+pub struct QuestionRequest {
+    pub intent: String,
+    pub root: String,
+    pub questions: Vec<QuestionNode>,
+}
+
+/// What an interactive tool is waiting for.
+#[derive(Debug, Clone)]
+pub enum InteractiveInputKind {
+    /// A line of stdin for a running command.
+    Text,
+    /// A branching questionnaire.
+    Questions(QuestionRequest),
+}
+
+/// The client's reply to an interactive request.
+#[derive(Debug, Clone)]
+pub enum InteractiveInputResponse {
+    Text(String),
+    Questions(UserQuestionResult),
+}
+
+/// A request for interactive input from a running tool.
+pub struct InteractiveInputRequest {
     pub request_id: String,
+    /// Tool call this request belongs to, used by the client to dismiss the UI
+    /// when the tool finishes or the turn is interrupted.
+    pub tool_call_id: String,
+    /// Prompt for the Text kind. Empty for Questions.
     pub prompt: String,
+    /// Whether a Text prompt should be masked.
     pub is_password: bool,
-    pub response_tx: tokio::sync::oneshot::Sender<String>,
+    pub kind: InteractiveInputKind,
+    pub response_tx: tokio::sync::oneshot::Sender<InteractiveInputResponse>,
 }
 
 #[derive(Clone)]
@@ -105,7 +135,7 @@ pub struct ToolContext {
     pub message_id: String,
     pub tool_call_id: String,
     pub working_dir: Option<PathBuf>,
-    pub stdin_request_tx: Option<tokio::sync::mpsc::UnboundedSender<StdinInputRequest>>,
+    pub stdin_request_tx: Option<tokio::sync::mpsc::UnboundedSender<InteractiveInputRequest>>,
     pub graceful_shutdown_signal: Option<InterruptSignal>,
     pub execution_mode: ToolExecutionMode,
 }
