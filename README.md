@@ -95,4 +95,14 @@ answer on each question, and a review screen:
   Desktop do not register it. See
   [docs/ASK_USER_QUESTION.md](docs/ASK_USER_QUESTION.md).
 
+### Project-defined slash commands (`.jcode/commands.json`)
+
+A repository can also declare deterministic slash commands that run a shell
+line with no model turn, no provider tokens, and no dependence on the tool
+list. Loaded from `$JCODE_HOME/commands.json` and
+`<working dir>/.jcode/commands.json`; arguments are appended verbatim, output
+renders as the usual shell card, `confirm: true` gates destructive entries, and
+Ctrl-C or the configured timeout kills the child. See
+[docs/PROJECT_COMMANDS.md](docs/PROJECT_COMMANDS.md).
+
 Everything else in this repository is upstream code.

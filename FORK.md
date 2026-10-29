@@ -54,6 +54,7 @@ install entry point.
 | C5 | `ask_user_question` branching TUI dialog | merged in `master`, installed | upstream `master` (ace3d721b, builds as 0.99.377-dev) | `jcode-tool-types`: `lib.rs`, `Cargo.toml` (serde, question types). `jcode-tool-core`: `lib.rs` (interactive input kind). `jcode-protocol`: `lib.rs`, `wire.rs`, `wire/events.rs`, `Cargo.toml`. `jcode-app-core`: `tool/mod.rs`, `tool/bash.rs`, `agent/turn_execution.rs`, `server/client_session.rs`, `server/client_lifecycle.rs`, `server/client_actions.rs`, protocol tests. `jcode-tui`: `tui/mod.rs`, `app.rs`, `app/tui_lifecycle.rs`, `app/tui_state.rs`, `app/input.rs`, `app/remote/key_handling.rs`, `app/remote/server_events.rs`, `app/remote.rs`, `tui/backend.rs`, `tui/ui.rs`. New: `tool/ask_user_question.rs`, `tui/question_overlay.rs`, `app/question_overlay.rs`, `docs/ASK_USER_QUESTION.md` | [plan](plans/ask-user-question.md) | yes (one new tool, one new TUI module, thin hooks) |
 | C6 | Kitty graphics inside Herdr panes | merged in `master`, installed (d39541113, 0.99.382-dev) | upstream `master` (ace3d721b, builds as 0.99.377-dev) | `jcode-tui-mermaid`: `mermaid_runtime.rs` (`fast_path_assumed_protocol`, `herdr_kitty_images_enabled`, hook in `init_picker`), runtime tests. `docs/HERDR.md` compatibility bullet. Herdr rewrites `TERM=xterm-256color`, exports `TERM_PROGRAM=herdr`, and strips `KITTY_WINDOW_ID`, so the fast env path returned `None` and every image-capable surface (Mermaid, LaTeX, read images) fell back to text. Herdr 0.9.5 renders Kitty graphics for child apps (`terminal.kitty_graphics`, on by default), so the fork now assumes Kitty when the env probe misses inside Herdr, leaving env-detected protocols and probe answers untouched; `JCODE_HERDR_KITTY_IMAGES=0` restores the old fallback, and tmux/screen nested inside a pane (`TERM=tmux-*`/`screen*`) still falls back to text. | n/a | yes (small additive detection rule + env opt-out, mirrors `JCODE_ZELLIJ_KITTY_IMAGES`) |
 | C7 | End-to-end todo task list doc | merged in `master` (docs only) | upstream `master` (b61e58b32) | `docs/README.md` (entry-point link). New: `docs/TODO_TASK_LIST.md`. Documents the existing tool schema, persisted todo state, TUI surfaces, turn-end poke and quality-gate order, pause conditions, budgets, configuration, and the headless/SDK entry points. No runtime behavior changed. | n/a | yes (docs only) |
+| C8 | Project-defined slash commands (`.jcode/commands.json`) | implemented (branch `feature/native-project-commands`) | upstream `master` (b61e58b32) | `jcode-protocol`: `wire.rs` (`InputShell` gains optional `cwd` and `timeout_secs`), `protocol_tests/misc_events.rs`. `jcode-app-core`: `lib.rs` (2 module declarations), `server/client_actions.rs` (`handle_input_shell` + `run_input_shell`, timeout/cancel), `server/client_lifecycle.rs` (request fields + shell cancel hook), `tool/project.rs` (shared config readers), `protocol_tests/misc_events.rs`. `jcode-tui`: `app.rs` (module + 2 fields), `app/tui_lifecycle.rs` (2 inits, `prefill_input`), `app/state_ui_runtime.rs` (registry + `known_command_names`), `app/state_ui_input_helpers.rs` (completion), `app/commands_dispatch.rs` (names + local hook), `app/remote/key_handling.rs` + `app/remote/input_dispatch.rs` (remote hook, `run_remote_shell`), `app/remote.rs` (re-export), `app/input.rs` (`run_local_project_shell`), `app/input/shell_commands.rs` (local timeout), `app/tui_state.rs` + `tui/mod.rs` + `tui/ui_tests/mod.rs` (`project_command_entries`), `tui/ui_overlays.rs` (help section), `tui/backend.rs` (`send_input_shell_with`). Root: `src/cli/args.rs`, `dispatch.rs`, `ssh.rs`, `selfdev.rs`, `tui_launch.rs`. New: `project_config.rs`, `input_shell_registry.rs`, `command/{mod.rs,project.rs}`, `app/commands_project.rs`, `app/tests/project_commands.rs`, `docs/PROJECT_COMMANDS.md` | [plan](plans/native-project-slash-commands.md) | yes (new modules + thin hooks) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
@@ -151,6 +152,31 @@ C4 conflict hints: the chip hook is the last three lines of `draw_status`
 `None` in `tui/mod.rs`; the poller refresh rides beside `refresh_justrust_status`
 in `app/local.rs` and `app/remote.rs`. If upstream changes those lines, the
 unique `refresh_provider_balance` call is the anchor.
+C8 best-way check: upstream has no repo-declared slash command surface. A skill
+starts a model turn; a project tool needs the model to choose it and is absent
+from a frozen tool list; operator config cannot add a native slash name. Chosen
+layer: minimal additive fork code, two new app-core modules plus thin hooks on
+the existing `Request::InputShell` path and the slash registry.
+C8 verify: `cargo test -p jcode-app-core --lib command::project` (13 loader
+tests), `cargo test -p jcode-app-core --lib input_shell` (8: shell timeout,
+cancel, cwd, stderr/exit, and Ctrl-C on a cancelled turn reaching a running
+shell), `cargo test -p jcode-protocol --lib input_shell`, and
+`cargo test -p jcode-tui --lib -- project_command confirm_requires
+initial_message_prefills built_in_command_wins resolver_builds`, and
+`e2e/run.py --binary <fork bin> --suite all` (30/30, including the
+`project_commands` suite that fails on stock by design). Runtime: a
+session rooted at a repo with `.jcode/commands.json` lists the commands in
+`/help` and completion; invoking one prints its shell card with exit code and
+duration and logs no provider stream event; `confirm: true` waits for `y`;
+Ctrl-C kills a running command.
+C8 conflict hints: the client registry hook is
+`App::project_commands` in `app/state_ui_runtime.rs`; dispatch hooks are the
+last `||` arm of `dispatch_single_local_command` and the top of
+`submit_remote_enter_input` / `submit_remote_slash_input`. `TuiState` gains
+`project_command_entries` next to `available_skills` (3 implementations). The
+wire change is additive (`#[serde(default)]` on both new `InputShell` fields), so
+an older peer still decodes the request. `InputShell` has one other call site:
+`RemoteConnection::send_input_shell_with`.
 C5 best-way check: no upstream question tool exists, no config, skill, or MCP
 path can render a native structured dialog, and the blocking tool-to-client
 interactive-input primitive already exists. Chosen layer: minimal additive fork
