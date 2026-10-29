@@ -1120,8 +1120,9 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
     draw_provider_balance_chip(frame, app.provider_balance_chip(), area, left_width);
 }
 
-/// Right-aligned provider credit chip. Dropped (never truncated or allowed to
-/// collide) when the left-hand status text already reaches it.
+/// Right-aligned provider credit / quota chip. Picks the longest label that
+/// fits without colliding with the left-hand status text, then drops the chip
+/// rather than truncating or wrapping it.
 fn draw_provider_balance_chip(
     frame: &mut Frame,
     chip: Option<&crate::tui::provider_balance::Chip>,
@@ -1141,12 +1142,19 @@ fn draw_provider_balance_chip(
     } else {
         dim_color()
     };
-    let line = Line::from(Span::styled(chip.label.clone(), Style::default().fg(color)));
-    let width = line.width() as u16;
-    // Keep a blank cell between the chip and the status text on its left.
-    if left_width.saturating_add(width as usize) + 2 > area.width as usize {
-        return;
+    let mut chosen = None;
+    for label in std::iter::once(&chip.label).chain(chip.fallbacks.iter()) {
+        let line = Line::from(Span::styled(label.clone(), Style::default().fg(color)));
+        let width = line.width() as u16;
+        // Keep a blank cell between the chip and the status text on its left.
+        if left_width.saturating_add(width as usize) + 2 <= area.width as usize {
+            chosen = Some((line, width));
+            break;
+        }
     }
+    let Some((line, width)) = chosen else {
+        return;
+    };
     let rect = Rect {
         x: area.x + area.width - width - 1,
         y: area.y,

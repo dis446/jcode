@@ -579,6 +579,9 @@ mod tests {
             balance_profile_for_label("OpenCode Go").map(|profile| profile.id),
             Some("opencode-go")
         );
+        // OpenCode Zen shares the host but exposes no usage endpoint.
+        assert_eq!(balance_profile("opencode"), None);
+        assert_eq!(balance_profile_for_label("OpenCode Zen"), None);
         assert_eq!(balance_profile("kimi"), None);
         assert_eq!(moonshot().id, "moonshotai");
         assert_eq!(opencode_go().id, "opencode-go");

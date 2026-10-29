@@ -18,6 +18,9 @@ const FETCH_DEADLINE: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chip {
     pub label: String,
+    /// Shorter labels tried in order when the full one would collide with the
+    /// left-hand status text. Balance chips carry none.
+    pub fallbacks: Vec<String>,
     pub low: bool,
     pub exhausted: bool,
 }
@@ -26,6 +29,7 @@ impl Chip {
     fn from_balance(balance: BalanceChip) -> Self {
         Self {
             label: balance.label(),
+            fallbacks: Vec::new(),
             low: balance.is_low(),
             exhausted: balance.is_exhausted(),
         }
@@ -35,7 +39,8 @@ impl Chip {
         let low = limits.is_low();
         let exhausted = limits.is_exhausted();
         Self {
-            label: limits_label(&limits),
+            label: limits_label(&limits, true),
+            fallbacks: vec![limits_label(&limits, false)],
             low,
             exhausted,
         }
@@ -61,18 +66,22 @@ fn window_short_name(name: &str) -> &str {
 }
 
 /// `OpenCode Go 5h 2% (58m) · 1w 20% (3d 6h) · 1mo 31% (15d)`.
-fn limits_label(limits: &LimitChip) -> String {
+fn limits_label(limits: &LimitChip, include_resets: bool) -> String {
     let windows = limits
         .windows
         .iter()
         .map(|window| {
-            let reset = window
-                .resets_at
-                .as_deref()
-                .map(jcode_tui_usage_overlay::format_reset_time)
-                .filter(|reset| !reset.is_empty())
-                .map(|reset| format!(" ({reset})"))
-                .unwrap_or_default();
+            let reset = if include_resets {
+                window
+                    .resets_at
+                    .as_deref()
+                    .map(jcode_tui_usage_overlay::format_reset_time)
+                    .filter(|reset| !reset.is_empty())
+                    .map(|reset| format!(" ({reset})"))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             format!(
                 "{} {:.0}%{}",
                 window_short_name(&window.name),
@@ -231,6 +240,7 @@ mod tests {
             ("Monthly", 31.0, None),
         ]));
         assert_eq!(chip.label, "OpenCode Go 5h 2% · 1w 20% · 1mo 31%");
+        assert_eq!(chip.fallbacks, vec![chip.label.clone()]);
         assert!(!chip.low && !chip.exhausted);
 
         let chip = Chip::from_limits(limits_chip(&[
@@ -241,6 +251,10 @@ mod tests {
         assert!(chip.label.starts_with("OpenCode Go 5h 2% ("));
         assert!(chip.label.contains(" · 1w 20% ("));
         assert!(chip.label.contains(" · 1mo 31% ("));
+        assert_eq!(
+            chip.fallbacks,
+            vec!["OpenCode Go 5h 2% · 1w 20% · 1mo 31%".to_string()]
+        );
     }
 
     #[test]
