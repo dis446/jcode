@@ -1,0 +1,47 @@
+From 973892d10131748a470ef49e4786dcf7d0aa0e64 Mon Sep 17 00:00:00 2001
+From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
+Date: Thu, 29 Oct 2026 13:33:02 +0800
+Subject: [PATCH 7/7] test(tui): cover /new command boundaries and name
+ trimming
+
+---
+ .../src/tui/app/tests/new_session_command.rs  | 23 +++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/crates/jcode-tui/src/tui/app/tests/new_session_command.rs b/crates/jcode-tui/src/tui/app/tests/new_session_command.rs
+index c8e7ab26e..6a17676f0 100644
+--- a/crates/jcode-tui/src/tui/app/tests/new_session_command.rs
++++ b/crates/jcode-tui/src/tui/app/tests/new_session_command.rs
+@@ -33,6 +33,29 @@ fn local_new_without_name_leaves_session_unnamed() {
+     assert_eq!(app.session.display_title(), None);
+ }
+ 
++#[test]
++fn local_new_requires_a_command_boundary() {
++    let mut app = create_test_app();
++    let old_id = app.session.id.clone();
++
++    assert!(!super::commands::handle_session_command(&mut app, "/newer"));
++    assert!(!super::commands::handle_session_command(&mut app, "/newest"));
++
++    assert_eq!(app.session.id, old_id);
++}
++
++#[test]
++fn local_new_trims_the_name() {
++    let mut app = create_test_app();
++
++    assert!(super::commands::handle_session_command(
++        &mut app,
++        "/new   spaced out name  "
++    ));
++
++    assert_eq!(app.session.display_title(), Some("spaced out name"));
++}
++
+ #[test]
+ fn remote_new_sends_clear_then_rename() {
+     let mut app = create_test_app();
+-- 
+2.56.0
+
