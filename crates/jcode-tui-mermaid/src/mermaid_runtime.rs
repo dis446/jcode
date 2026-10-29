@@ -142,6 +142,14 @@ pub(super) fn fast_path_assumed_protocol(
     }
 }
 
+/// True when `TERM` names a terminal multiplexer inside the Herdr pane. In
+/// that case jcode talks to the inner multiplexer, not to Herdr, so Herdr's
+/// Kitty support cannot be assumed; the previous text fallback is correct.
+fn term_is_nested_multiplexer(term: Option<&str>) -> bool {
+    let term = term.unwrap_or("").to_ascii_lowercase();
+    term.starts_with("tmux") || term.starts_with("screen")
+}
+
 pub(super) fn use_classic_kitty() -> bool {
     #[cfg(test)]
     {
@@ -505,7 +513,8 @@ pub fn init_picker() {
             mode,
             env_protocol,
             multiplexer,
-            herdr_kitty_images_enabled(),
+            herdr_kitty_images_enabled()
+                && !term_is_nested_multiplexer(std::env::var("TERM").ok().as_deref()),
         ) {
             crate::log_info(
                 "Herdr masks the outer terminal identity; assuming Kitty graphics \
@@ -1105,6 +1114,15 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn nested_multiplexer_term_blocks_herdr_assumption() {
+        assert!(term_is_nested_multiplexer(Some("tmux-256color")));
+        assert!(term_is_nested_multiplexer(Some("screen.xterm-256color")));
+        assert!(!term_is_nested_multiplexer(Some("xterm-256color")));
+        assert!(!term_is_nested_multiplexer(Some("xterm-kitty")));
+        assert!(!term_is_nested_multiplexer(None));
     }
 
     #[test]
