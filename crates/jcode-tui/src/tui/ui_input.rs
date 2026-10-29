@@ -847,11 +847,15 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
     }
 }
 
-/// Narrowest status row the chip may leave for upstream's stable status.
-const PROVIDER_BALANCE_MIN_STATUS_WIDTH: u16 = 40;
+/// Narrowest status row the chip may leave for upstream's stable status: the
+/// glyph plus the fixed phase cell, so the phase label is never hidden. The
+/// stable row pads to its full width, so this bound (not its text) decides
+/// whether the chip fits; elapsed time and telemetry truncate first.
+const PROVIDER_BALANCE_MIN_STATUS_WIDTH: u16 = 16;
 
-/// Right-aligned provider credit chip. Dropped (never truncated) when the
-/// frame cannot also keep a usable status row on its left.
+/// Right-aligned provider credit / quota chip. Picks the longest label that
+/// still leaves a usable status row on its left, then drops the chip rather
+/// than truncating or wrapping it.
 fn provider_balance_chip_line(
     chip: Option<&crate::tui::provider_balance::Chip>,
     area: Rect,
@@ -867,13 +871,21 @@ fn provider_balance_chip_line(
     } else {
         dim_color()
     };
-    let line = Line::from(Span::styled(chip.label.clone(), Style::default().fg(color)));
-    let width = line.width() as u16;
-    // One blank cell on each side of the chip.
-    if PROVIDER_BALANCE_MIN_STATUS_WIDTH.saturating_add(width).saturating_add(2) > area.width {
-        return None;
-    }
-    Some((line, width))
+    // Prefer the full label, then each compact fallback, then drop the chip.
+    std::iter::once(&chip.label)
+        .chain(chip.fallbacks.iter())
+        .map(|label| {
+            let line = Line::from(Span::styled(label.clone(), Style::default().fg(color)));
+            let width = line.width() as u16;
+            (line, width)
+        })
+        // One blank cell on each side of the chip.
+        .find(|(_, width)| {
+            PROVIDER_BALANCE_MIN_STATUS_WIDTH
+                .saturating_add(*width)
+                .saturating_add(2)
+                <= area.width
+        })
 }
 
 fn running_tool_header_spans(
