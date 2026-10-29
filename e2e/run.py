@@ -19,7 +19,11 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-SUITES = {"baseline": "suite_baseline", "at_file": "suite_at_file"}
+SUITES = {
+    "baseline": "suite_baseline",
+    "at_file": "suite_at_file",
+    "project_commands": "suite_project_commands",
+}
 
 
 def version_of(binary):

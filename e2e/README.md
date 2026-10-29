@@ -14,12 +14,15 @@ e2e/run.py --binary ... --suite baseline --repeat 8 -j 12         # flake hunt
 | ----- | ------- | ------- |
 | `baseline` | stock **and** fork | Behavior the fork must never change (composer, slash palette, paste, resize, undo). |
 | `at_file` | fork only (C1) | The `@file` picker. Fails on stock by design: proves the tests detect the feature. |
+| `project_commands` | fork only (C5) | `.jcode/commands.json` dispatch, completion, help, arguments, and confirm. Fails on stock by design. |
 
 ## Why it is deterministic
 
 - Each test gets its own `HOME`, `JCODE_HOME`, `JCODE_RUNTIME_DIR`, `XDG_RUNTIME_DIR`,
   tmux server socket and work tree. Scrubbed env (`env -i`), telemetry and updates off.
   Tests therefore run in parallel safely and never touch `~/.jcode` or your daemon.
+- Each sandbox seeds `setup_hints.json` with an established-install launch count, so
+  first-run onboarding never opens and swallows the keystrokes a test types.
 - No network, no provider: only the composer is exercised, nothing is sent.
 - No fixed sleeps. Every step polls the screen for a predicate with a hard timeout and
   prints the last screen on failure.

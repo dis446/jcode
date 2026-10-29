@@ -11,9 +11,17 @@ def t_starts_and_shows_composer(b, expect_version):
     with Session(b) as s:
         screen = s.wait_ready()
         assert "1>" in screen, screen
-        if expect_version:
-            assert f"v{expect_version}" in screen, f"version {expect_version} not on screen\n{screen}"
         assert s.alive()
+
+
+def t_version_command_reports_build(b, expect_version):
+    if not expect_version:
+        return
+    with Session(b) as s:
+        s.wait_ready()
+        s.type("/version")
+        s.key("Enter")
+        s.wait_text(f"v{expect_version}")
 
 
 def t_typing_echoes_and_ctrl_u_clears(b, v):
