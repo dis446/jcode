@@ -47,6 +47,13 @@ pub(crate) struct Args {
     #[arg(long, global = true)]
     pub(crate) remote_working_dir: Option<String>,
 
+    /// Prefill the composer with this text at startup without sending it.
+    ///
+    /// Nothing reaches the model until you submit. Useful for spawning an idle
+    /// pane that already carries an instruction or a draft.
+    #[arg(long = "initial-message", global = true, value_name = "TEXT")]
+    pub(crate) initial_message: Option<String>,
+
     /// Run the UI locally and attach to the persistent Jcode server on this SSH host
     #[arg(long, global = true, conflicts_with = "socket", value_name = "HOST")]
     pub(crate) ssh: Option<String>,

@@ -534,6 +534,22 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         }
     }
 
+    let project_commands = app.project_command_entries();
+    if !project_commands.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(separator());
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled(
+            "  Project commands",
+            section_style,
+        )));
+        lines.push(Line::from(""));
+        for (name, description) in &project_commands {
+            lines.push(help_entry(name, description));
+        }
+    }
+
     let skills = app.available_skills();
     if !skills.is_empty() {
         lines.push(Line::from(""));

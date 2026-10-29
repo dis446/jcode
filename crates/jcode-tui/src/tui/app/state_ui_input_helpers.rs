@@ -339,6 +339,15 @@ impl App {
             })
             .collect();
 
+        // Project commands sit between built-ins and skills, matching the
+        // submission precedence. Their descriptions render in /help.
+        for command in self.project_commands().iter() {
+            let name = format!("/{}", command.name());
+            if seen.insert(name.clone()) {
+                commands.push((name, "Project command"));
+            }
+        }
+
         let skills = self.current_skills_snapshot();
         push_skill_commands(&mut commands, &mut seen, &skills);
 

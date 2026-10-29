@@ -956,6 +956,7 @@ async fn run_default_command(args: Args) -> Result<()> {
         args.remote_working_dir,
         args.onboarding_sim,
         args.update_sim,
+        args.initial_message,
     )
     .await?;
 
