@@ -255,4 +255,16 @@ mod tests {
             serde_json::from_str(r#"{"usage_display":"used"}"#).expect("display config");
         assert!(used.usage_display_used());
     }
+
+    #[test]
+    fn provider_balance_chip_defaults_on_and_accepts_opt_out() {
+        assert!(DisplayConfig::default().provider_balance);
+
+        let missing: DisplayConfig = serde_json::from_str("{}").expect("display config");
+        assert!(missing.provider_balance);
+
+        let disabled: DisplayConfig =
+            serde_json::from_str(r#"{"provider_balance":false}"#).expect("display config");
+        assert!(!disabled.provider_balance);
+    }
 }
