@@ -1544,6 +1544,11 @@ impl App {
         // Get suggestions for current input
         let current_suggestions = self.get_suggestions_for(&self.input);
 
+        // CUSTOM (C1): Tab on a non-slash token forces file completion.
+        if current_suggestions.is_empty() && self.at_file_force_complete() {
+            return true;
+        }
+
         // Check if we're continuing a tab cycle from a previous base
         if let Some((ref base, idx)) = self.tab_completion_state.clone() {
             let base_suggestions = self.get_suggestions_for(base);

@@ -33,6 +33,8 @@ pub struct AtPrefix {
     pub query: String,
     /// Prefix used the `@"..."` form.
     pub quoted: bool,
+    /// False for a Tab-forced plain path token (no `@` is inserted).
+    pub at: bool,
 }
 
 fn is_wrapper(c: char) -> bool {
@@ -64,6 +66,7 @@ pub fn extract_at_prefix(text: &str, cursor: usize) -> Option<AtPrefix> {
                 start: pos,
                 query: after_open.to_string(),
                 quoted: true,
+                at: true,
             });
         }
     }
@@ -85,6 +88,36 @@ pub fn extract_at_prefix(text: &str, cursor: usize) -> Option<AtPrefix> {
         start: cursor - rest.len() - 1,
         query: rest.to_string(),
         quoted: false,
+        at: true,
+    })
+}
+
+/// Tab-forced completion: the plain token ending at `cursor` (no `@` needed).
+/// Prefers the `@` form when the token has one. `None` for an empty token.
+pub fn extract_path_token(text: &str, cursor: usize) -> Option<AtPrefix> {
+    if let Some(p) = extract_at_prefix(text, cursor) {
+        return Some(p);
+    }
+    let cursor = cursor.min(text.len());
+    if !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let before = &text[..cursor];
+    let start = before
+        .char_indices()
+        .rev()
+        .find(|(_, c)| is_boundary(*c))
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    let token = &before[start..];
+    if token.is_empty() || token.contains('"') {
+        return None;
+    }
+    Some(AtPrefix {
+        start,
+        query: token.to_string(),
+        quoted: false,
+        at: false,
     })
 }
 
@@ -238,10 +271,11 @@ pub fn apply_completion(
 ) -> (String, usize) {
     let cursor = cursor.min(text.len());
     let needs_quotes = prefix.quoted || candidate.path.contains(' ');
+    let at = if prefix.at { "@" } else { "" };
     let mut value = if needs_quotes {
-        format!("@\"{}\"", candidate.path)
+        format!("{at}\"{}\"", candidate.path)
     } else {
-        format!("@{}", candidate.path)
+        format!("{at}{}", candidate.path)
     };
     let mut after = &text[cursor..];
     // Typing inside an existing `@"..."` pair: reuse its closing quote.
