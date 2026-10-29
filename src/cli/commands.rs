@@ -2630,8 +2630,11 @@ pub async fn run_single_message_command(
     // prompt-cache miss) and connects in the background (connect-on-first-call).
     // For a short single-message run, startup latency is unchanged.
     // (#390, #206 Phase 2)
+    let run_working_dir = std::env::current_dir().ok();
     if run_command_mcp_enabled() {
-        registry.register_mcp_tools(None, None, None).await;
+        registry
+            .register_mcp_tools_for_dir(None, None, None, run_working_dir.clone())
+            .await;
         // Cold-cache gap: when a configured MCP server has no cached schema yet
         // (first ever use, or reconfigured), advertise-early registers nothing
         // for it, and a single-turn `jcode run` locks its tool snapshot before
@@ -2642,6 +2645,12 @@ pub async fn run_single_message_command(
         // the agent runs. Warm runs skip this entirely and stay instant. (#390)
         wait_for_cold_cache_mcp_tools(&registry).await;
     }
+    // Project tools are independent of MCP and pass the process cwd explicitly:
+    // the no-working-dir path is reserved for long-lived daemon sessions where
+    // the process cwd is unrelated to the session.
+    registry
+        .register_project_tools_for_dir(run_working_dir)
+        .await;
     let mut agent = crate::agent::Agent::new(provider.clone(), registry);
     if let Err(error) = restore_agent_session_if_requested(&mut agent, resume_session) {
         agent.mark_closed();

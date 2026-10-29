@@ -991,13 +991,18 @@ impl Server {
             if session.is_canary {
                 registry.register_selfdev_tools().await;
             }
+            let session_working_dir =
+                session.working_dir.as_ref().map(std::path::PathBuf::from);
             registry
                 .register_mcp_tools_for_dir(
                     None,
                     Some(Arc::clone(&mcp_pool)),
                     Some("headless".to_string()),
-                    session.working_dir.as_ref().map(std::path::PathBuf::from),
+                    session_working_dir.clone(),
                 )
+                .await;
+            registry
+                .register_project_tools_for_dir(session_working_dir)
                 .await;
 
             let agent = Arc::new(Mutex::new(Agent::new_with_session(

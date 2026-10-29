@@ -1564,44 +1564,73 @@ impl Registry {
             .await
     }
 
+    /// Register tools declared in `$JCODE_HOME/tools.json` (normally
+    /// `~/.jcode/tools.json`) and `<working_dir>/.jcode/tools.json` for this
+    /// session. Previously registered project tools are replaced on every call.
+    /// Collisions with a tool that is not project-defined are skipped, so
+    /// built-ins, MCP tools, and self-dev keep their names.
+    pub async fn register_project_tools_for_dir(&self, working_dir: Option<std::path::PathBuf>) {
+        let global = project::global_tools_path();
+        self.register_project_tools_with_global(working_dir, global.as_deref())
+            .await;
+    }
+
+    /// Testable core of [`Self::register_project_tools_for_dir`]. `global` is
+    /// already resolved so tests never read the developer's real jcode home.
+    pub(crate) async fn register_project_tools_with_global(
+        &self,
+        working_dir: Option<std::path::PathBuf>,
+        global: Option<&std::path::Path>,
+    ) {
+        let specs = project::load_specs_with_global(working_dir.as_deref(), global);
+        let mut tools = self.tools.write().await;
+
+        let stale: Vec<String> = tools
+            .iter()
+            .filter(|(_, tool)| tool.is_project_tool())
+            .map(|(name, _)| name.clone())
+            .collect();
+        let removed = stale.len();
+        for name in stale {
+            tools.remove(&name);
+        }
+
+        let mut registered = 0usize;
+        let mut skipped = Vec::new();
+        for spec in specs {
+            if tools.contains_key(spec.name()) {
+                skipped.push(spec.name().to_string());
+                continue;
+            }
+            let name = spec.name().to_string();
+            tools.insert(
+                name,
+                Arc::new(project::ProjectTool::new(spec)) as Arc<dyn Tool>,
+            );
+            registered += 1;
+        }
+        drop(tools);
+
+        for name in skipped {
+            crate::logging::warn(&format!(
+                "project tools: '{name}' is already registered; skipping"
+            ));
+        }
+        if registered > 0 || removed > 0 {
+            crate::logging::info(&format!(
+                "project tools: {registered} registered, {removed} replaced for working dir {}",
+                working_dir
+                    .as_deref()
+                    .map(|dir| dir.display().to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ));
+        }
+    }
+
     /// Like [`Self::register_mcp_tools`], but resolves project-local MCP config
     /// (`.mcp.json`, `.jcode/mcp.json`, `.claude/mcp.json`) against
     /// `working_dir` instead of the server process cwd. Remote/client sessions
     /// must pass their session working directory here (issue #420).
-    /// Register tools declared in `~/.jcode/tools.json` and
-    /// `<working_dir>/.jcode/tools.json` for this session. Collisions with an
-    /// already-registered tool are skipped: built-ins and MCP keep their names.
-    pub async fn register_project_tools_for_dir(&self, working_dir: Option<std::path::PathBuf>) {
-        let specs = project::load_specs(working_dir.as_deref());
-        if specs.is_empty() {
-            return;
-        }
-        let existing: HashSet<String> = self.tools.read().await.keys().cloned().collect();
-        let mut registered = 0usize;
-        for spec in specs {
-            if existing.contains(spec.name()) {
-                crate::logging::warn(&format!(
-                    "project tools: '{}' is already registered; skipping",
-                    spec.name()
-                ));
-                continue;
-            }
-            registered += 1;
-            self.register(
-                spec.name().to_string(),
-                Arc::new(project::ProjectTool::new(spec)),
-            )
-            .await;
-        }
-        crate::logging::info(&format!(
-            "project tools: registered {registered} tool(s) for working dir {}",
-            working_dir
-                .as_deref()
-                .map(|dir| dir.display().to_string())
-                .unwrap_or_else(|| "<none>".to_string())
-        ));
-    }
-
     pub async fn register_mcp_tools_for_dir(
         &self,
         event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::protocol::ServerEvent>>,
@@ -1609,10 +1638,6 @@ impl Registry {
         session_id: Option<String>,
         working_dir: Option<std::path::PathBuf>,
     ) {
-        // Project-defined tools use the same session working directory as
-        // project-local MCP config, so one call site covers both.
-        self.register_project_tools_for_dir(working_dir.clone()).await;
-
         use crate::mcp::McpManager;
         use std::sync::Arc;
         use tokio::sync::RwLock;

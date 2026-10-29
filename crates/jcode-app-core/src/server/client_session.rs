@@ -799,47 +799,54 @@ pub(super) async fn handle_subscribe(
         registry.register_selfdev_tools().await;
     }
 
-    let mcp_register_ms = if register_mcp_tools {
-        let mcp_register_start = Instant::now();
-        // Resolve project-local MCP config against the session working dir,
-        // not the server process cwd (issue #420). Prefer the subscribe
-        // request's dir; fall back to the agent's stored session dir.
-        let mcp_working_dir = match subscribe_working_dir.as_ref() {
-            // Resolve against the bound directory so a rejected home-dir report
-            // cannot point project-local MCP discovery at home (issue #481).
-            Some(dir) => {
-                let current = agent
-                    .try_lock()
-                    .ok()
-                    .and_then(|guard| guard.working_dir().map(str::to_string));
-                Some(PathBuf::from(effective_subscribe_working_dir(
-                    current.as_deref(),
-                    dir,
-                    dirs::home_dir().as_deref(),
-                )))
-            }
-            None => agent
+    // Resolve project-local tool and MCP config against the session working
+    // dir, not the server process cwd (issue #420). Prefer the subscribe
+    // request's dir; fall back to the agent's stored session dir.
+    let mcp_working_dir = match subscribe_working_dir.as_ref() {
+        // Resolve against the bound directory so a rejected home-dir report
+        // cannot point project-local discovery at home (issue #481).
+        Some(dir) => {
+            let current = agent
                 .try_lock()
                 .ok()
-                .and_then(|agent_guard| agent_guard.working_dir().map(PathBuf::from))
-                .or_else(|| {
-                    crate::session::Session::load_startup_stub(client_session_id)
-                        .ok()
-                        .and_then(|session| session.working_dir.map(PathBuf::from))
-                }),
-        };
+                .and_then(|guard| guard.working_dir().map(str::to_string));
+            Some(PathBuf::from(effective_subscribe_working_dir(
+                current.as_deref(),
+                dir,
+                dirs::home_dir().as_deref(),
+            )))
+        }
+        None => agent
+            .try_lock()
+            .ok()
+            .and_then(|agent_guard| agent_guard.working_dir().map(PathBuf::from))
+            .or_else(|| {
+                crate::session::Session::load_startup_stub(client_session_id)
+                    .ok()
+                    .and_then(|session| session.working_dir.map(PathBuf::from))
+            }),
+    };
+
+    let mcp_register_ms = if register_mcp_tools {
+        let mcp_register_start = Instant::now();
         registry
             .register_mcp_tools_for_dir(
                 Some(client_event_tx.clone()),
                 Some(Arc::clone(mcp_pool)),
                 Some(client_session_id.to_string()),
-                mcp_working_dir,
+                mcp_working_dir.clone(),
             )
             .await;
         mcp_register_start.elapsed().as_millis()
     } else {
         0
     };
+    // Project tools are independent of MCP: `JCODE_RUN_MCP=0` and the
+    // no-MCP attach path must still load them. Registering after the fixed MCP
+    // tools keeps `mcp`, `mcp_search`, and `mcp_call` from being shadowed.
+    registry
+        .register_project_tools_for_dir(mcp_working_dir)
+        .await;
 
     crate::logging::info(&format!(
         "[TIMING] handle_subscribe: session={}, working_dir_set={}, selfdev={}, mcp_register={}ms, total={}ms",
@@ -1638,8 +1645,11 @@ pub(super) async fn handle_resume_session(
                 Some(client_event_tx.clone()),
                 Some(Arc::clone(mcp_pool)),
                 Some(session_id.clone()),
-                mcp_working_dir,
+                mcp_working_dir.clone(),
             )
+            .await;
+        registry
+            .register_project_tools_for_dir(mcp_working_dir)
             .await;
         spawn_model_prefetch_update(Arc::clone(provider), Arc::clone(live_target_agent));
         crate::logging::event_info(
@@ -2068,8 +2078,11 @@ pub(super) async fn handle_resume_session(
                     Some(client_event_tx.clone()),
                     Some(Arc::clone(mcp_pool)),
                     Some(session_id.clone()),
-                    mcp_working_dir,
+                    mcp_working_dir.clone(),
                 )
+                .await;
+            registry
+                .register_project_tools_for_dir(mcp_working_dir)
                 .await;
             spawn_model_prefetch_update(Arc::clone(provider), Arc::clone(agent));
             crate::logging::event_info(

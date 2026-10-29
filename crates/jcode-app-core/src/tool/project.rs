@@ -3,8 +3,8 @@
 //! jcode ships two ways to add tools: MCP servers and SDK client-executed
 //! tools. Neither lets a repository declare a small local command as a
 //! first-class tool with its own name. This module does: every session loads
-//! `~/.jcode/tools.json` and then `<working_dir>/.jcode/tools.json`, and each
-//! entry becomes an ordinary tool.
+//! `$JCODE_HOME/tools.json` (normally `~/.jcode/tools.json`) and then
+//! `<working_dir>/.jcode/tools.json`, and each entry becomes an ordinary tool.
 //!
 //! ```json
 //! {
@@ -22,11 +22,16 @@
 //! ```
 //!
 //! The tool input JSON is written to the command's stdin and its output is the
-//! tool result. `command` is an argv array (no shell); a relative first element
-//! resolves against the project root (the parent of `.jcode`), so a symlinked
-//! `.jcode/tools.json` runs commands from the project that owns the file.
-//! `cwd` is `project` (default) or `session`. Invalid entries are skipped with
-//! a warning: a broken tools file must never prevent a session from starting.
+//! tool result. `command` is an argv array; jcode does not add a shell, though a
+//! declared command may itself be one. A relative first element resolves against
+//! the config file's root, so a symlinked `.jcode/tools.json` runs commands from
+//! the project that owns the file. `cwd` is `project` or `session`; the default
+//! is `session` for the global file and `project` for a repo file. Invalid
+//! entries are skipped with a warning: a broken tools file must never prevent a
+//! session from starting.
+//!
+//! Project tools are replaced on every session attach, so editing or deleting
+//! the files takes effect on the next attach.
 
 use super::{Tool, ToolContext, ToolOutput};
 use anyhow::{Context, Result, bail};
@@ -36,15 +41,18 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS: u64 = 3600;
 const MAX_RESULT_BYTES: usize = 128 * 1024;
+const READ_CHUNK_BYTES: usize = 8 * 1024;
 const MAX_NAME_LEN: usize = 64;
-/// Generic flag jcode adds to every tool schema; the command should not see it.
+/// Generic flags jcode adds to every tool schema; the command should not see
+/// them. `intent` is stripped only when the declared schema does not own it.
 const ACCEPT_LARGE_OUTPUT: &str = "accept_large_output";
+const INTENT: &str = "intent";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -57,7 +65,7 @@ enum CwdMode {
 #[derive(Debug, Deserialize)]
 struct ToolsFile {
     #[serde(default)]
-    tools: Vec<ToolEntry>,
+    tools: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,7 +80,7 @@ struct ToolEntry {
     #[serde(default)]
     timeout_secs: Option<u64>,
     #[serde(default)]
-    cwd: CwdMode,
+    cwd: Option<CwdMode>,
     #[serde(default)]
     env: BTreeMap<String, String>,
 }
@@ -86,8 +94,8 @@ pub(crate) struct ProjectToolSpec {
     timeout: Duration,
     cwd: CwdMode,
     env: BTreeMap<String, String>,
-    /// Project root that owns the config file; relative commands and the
-    /// default working directory resolve against it.
+    /// Root of the config file that owns this entry (the project root for a
+    /// repo file, the jcode home for the global file).
     base_dir: PathBuf,
 }
 
@@ -96,7 +104,7 @@ impl ProjectToolSpec {
         &self.name
     }
 
-    fn validate(entry: ToolEntry, base_dir: &Path) -> Result<Self> {
+    fn validate(entry: ToolEntry, base_dir: &Path, default_cwd: CwdMode) -> Result<Self> {
         let name = entry.name.trim().to_string();
         if name.is_empty() || name.len() > MAX_NAME_LEN {
             bail!("tool name must be 1..={MAX_NAME_LEN} characters");
@@ -134,7 +142,7 @@ impl ProjectToolSpec {
             command: entry.command,
             parameters,
             timeout: Duration::from_secs(timeout_secs),
-            cwd: entry.cwd,
+            cwd: entry.cwd.unwrap_or(default_cwd),
             env: entry.env,
             base_dir: base_dir.to_path_buf(),
         })
@@ -163,35 +171,72 @@ impl ProjectToolSpec {
             CwdMode::Project => self.base_dir.clone(),
         }
     }
+
+    fn declares_intent(&self) -> bool {
+        self.parameters
+            .get("properties")
+            .and_then(Value::as_object)
+            .is_some_and(|properties| properties.contains_key(INTENT))
+    }
+}
+
+/// The global project-tools file. Uses jcode's home resolver so
+/// `JCODE_HOME` isolates sandboxed runs instead of leaking the real user file.
+pub(crate) fn global_tools_path() -> Option<PathBuf> {
+    crate::storage::jcode_dir()
+        .ok()
+        .map(|dir| dir.join("tools.json"))
 }
 
 /// Load global then project tool definitions. Project entries win on a name
-/// clash. A missing or malformed file never fails the session.
-pub(crate) fn load_specs(working_dir: Option<&Path>) -> Vec<ProjectToolSpec> {
-    let mut paths: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        paths.push(home.join(".jcode").join("tools.json"));
+/// clash. A missing or malformed file never fails the session. `global` is the
+/// already-resolved global file, so tests never read the developer's real home.
+pub(crate) fn load_specs_with_global(
+    working_dir: Option<&Path>,
+    global: Option<&Path>,
+) -> Vec<ProjectToolSpec> {
+    #[derive(Clone, Copy)]
+    enum SourceKind {
+        Global,
+        Project,
     }
-    let project_root = match working_dir {
-        Some(dir) => Some(dir.to_path_buf()),
-        None => std::env::current_dir().ok(),
-    };
-    if let Some(root) = project_root {
-        paths.push(root.join(".jcode").join("tools.json"));
+
+    let mut sources: Vec<(PathBuf, CwdMode, SourceKind)> = Vec::new();
+    if let Some(path) = global {
+        // A global tool belongs to the user's home, but it usually acts on the
+        // project the session is in, so session cwd is the useful default.
+        sources.push((path.to_path_buf(), CwdMode::Session, SourceKind::Global));
+    }
+    if let Some(root) = working_dir {
+        sources.push((
+            root.join(".jcode").join("tools.json"),
+            CwdMode::Project,
+            SourceKind::Project,
+        ));
     }
 
     let mut merged: Vec<ProjectToolSpec> = Vec::new();
-    for path in paths {
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            continue;
+    for (path, default_cwd, kind) in sources {
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "project tools: cannot read {}: {err}",
+                    path.display()
+                ));
+                continue;
+            }
         };
         // Resolve the real path so a symlinked config runs its commands from
-        // the project that owns the file, not the link's location. The base is
-        // the project root: `<root>/.jcode/tools.json` -> `<root>`.
+        // the project that owns the file, not the link's location. A repo file
+        // at `<root>/.jcode/tools.json` belongs to `<root>`; a global file at
+        // `$JCODE_HOME/tools.json` belongs to `$JCODE_HOME`.
         let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        let base_dir = real
-            .parent()
-            .and_then(Path::parent)
+        let base_dir = match kind {
+            SourceKind::Global => real.parent(),
+            SourceKind::Project => real.parent().and_then(Path::parent),
+        }
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let file: ToolsFile = match serde_json::from_str(&raw) {
@@ -204,8 +249,19 @@ pub(crate) fn load_specs(working_dir: Option<&Path>) -> Vec<ProjectToolSpec> {
                 continue;
             }
         };
-        for entry in file.tools {
-            match ProjectToolSpec::validate(entry, &base_dir) {
+        for (index, value) in file.tools.into_iter().enumerate() {
+            let entry: ToolEntry = match serde_json::from_value(value) {
+                Ok(entry) => entry,
+                Err(err) => {
+                    crate::logging::warn(&format!(
+                        "project tools: skipping entry #{} in {}: {err}",
+                        index + 1,
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            match ProjectToolSpec::validate(entry, &base_dir, default_cwd) {
                 Ok(spec) => merge_spec(&mut merged, spec),
                 Err(err) => crate::logging::warn(&format!(
                     "project tools: skipping an entry in {}: {err}",
@@ -237,15 +293,49 @@ impl ProjectTool {
     }
 }
 
-fn cap_output(mut output: String) -> String {
-    if output.len() <= MAX_RESULT_BYTES {
+/// Read at most `cap` bytes, then keep draining the pipe so the child never
+/// blocks on a full output buffer. Returns the kept bytes and how many were
+/// discarded.
+async fn read_capped<R>(reader: Option<R>, cap: usize) -> (Vec<u8>, usize)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let Some(mut reader) = reader else {
+        return (Vec::new(), 0);
+    };
+    let mut kept = Vec::with_capacity(cap.min(READ_CHUNK_BYTES));
+    let mut omitted = 0usize;
+    let mut buf = [0u8; READ_CHUNK_BYTES];
+    loop {
+        match reader.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                let room = cap.saturating_sub(kept.len());
+                let take = room.min(n);
+                kept.extend_from_slice(&buf[..take]);
+                omitted += n - take;
+            }
+            Err(_) => break,
+        }
+    }
+    (kept, omitted)
+}
+
+fn lossy_string(bytes: Vec<u8>) -> String {
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Cap `output` at the result budget. `extra_omitted` counts bytes already
+/// discarded by the pipe readers so the marker reports the real loss.
+fn cap_output(mut output: String, extra_omitted: usize) -> String {
+    if output.len() <= MAX_RESULT_BYTES && extra_omitted == 0 {
         return output;
     }
-    let mut end = MAX_RESULT_BYTES;
+    let mut end = output.len().min(MAX_RESULT_BYTES);
     while end > 0 && !output.is_char_boundary(end) {
         end -= 1;
     }
-    let omitted = output.len() - end;
+    let omitted = extra_omitted + (output.len() - end);
     output.truncate(end);
     output.push_str(&format!("\n[truncated {omitted} bytes]"));
     output
@@ -257,6 +347,10 @@ impl Tool for ProjectTool {
         &self.spec.name
     }
 
+    fn is_project_tool(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         &self.spec.description
     }
@@ -266,15 +360,20 @@ impl Tool for ProjectTool {
     }
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
+        let declares_intent = self.spec.declares_intent();
         let mut payload = match input {
             Value::Object(map) => Value::Object(map),
             _ => json!({}),
         };
         if let Value::Object(map) = &mut payload {
             map.remove(ACCEPT_LARGE_OUTPUT);
+            if !declares_intent {
+                map.remove(INTENT);
+            }
         }
         let mut stdin_json = payload.to_string();
         stdin_json.push('\n');
+        let stdin_json = stdin_json.into_bytes();
 
         let program = self.spec.program();
         let cwd = self.spec.working_dir(&ctx);
@@ -296,25 +395,43 @@ impl Tool for ProjectTool {
                 cwd.display()
             )
         })?;
-        if let Some(mut stdin) = child.stdin.take() {
-            // A command that never reads stdin must not fail the call; a pipe
-            // error is reported by the process's own exit status.
-            let _ = stdin.write_all(stdin_json.as_bytes()).await;
-            drop(stdin);
-        }
 
-        let output = match tokio::time::timeout(self.spec.timeout, child.wait_with_output()).await {
-            Ok(result) => result.context("failed to wait for the project tool")?,
-            Err(_) => bail!(
-                "tool '{}' timed out after {}s",
-                self.spec.name,
-                self.spec.timeout.as_secs()
-            ),
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        // The timeout covers writing stdin, reading both pipes, and waiting.
+        // A child that never reads a large input therefore cannot hang the
+        // call beyond `timeout_secs`.
+        let exchange = async move {
+            let write = async move {
+                if let Some(mut stdin) = stdin {
+                    // A command that never reads stdin must not fail the call;
+                    // a pipe error is reported by the process's own exit status.
+                    let _ = stdin.write_all(&stdin_json).await;
+                }
+            };
+            let read_stdout = read_capped(stdout, MAX_RESULT_BYTES);
+            let read_stderr = read_capped(stderr, MAX_RESULT_BYTES);
+            let wait = async move { child.wait().await };
+            let (_, (stdout, stdout_omitted), (stderr, stderr_omitted), status) =
+                tokio::join!(write, read_stdout, read_stderr, wait);
+            let status = status.context("failed to wait for the project tool")?;
+            Ok::<_, anyhow::Error>((stdout, stdout_omitted, stderr, stderr_omitted, status))
         };
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut combined = stdout.trim_end().to_string();
+        let (stdout, stdout_omitted, stderr, stderr_omitted, status) =
+            match tokio::time::timeout(self.spec.timeout, exchange).await {
+                Ok(result) => result?,
+                Err(_) => bail!(
+                    "tool '{}' timed out after {}s",
+                    self.spec.name,
+                    self.spec.timeout.as_secs()
+                ),
+            };
+
+        let omitted = stdout_omitted + stderr_omitted;
+        let mut combined = lossy_string(stdout).trim_end().to_string();
+        let stderr = lossy_string(stderr);
         if !stderr.trim().is_empty() {
             if !combined.is_empty() {
                 combined.push('\n');
@@ -323,20 +440,19 @@ impl Tool for ProjectTool {
             combined.push_str(stderr.trim_end());
         }
 
-        if !output.status.success() {
-            let status = output
-                .status
+        if !status.success() {
+            let status = status
                 .code()
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| "signal".to_string());
             bail!(
                 "tool '{}' exited with status {status}\n{}",
                 self.spec.name,
-                cap_output(combined)
+                cap_output(combined, omitted)
             );
         }
 
-        Ok(ToolOutput::new(cap_output(combined))
+        Ok(ToolOutput::new(cap_output(combined, omitted))
             .with_title(self.spec.name.clone())
             .with_metadata(json!({"command": self.spec.command, "cwd": cwd})))
     }
@@ -345,6 +461,8 @@ impl Tool for ProjectTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool::Registry;
+    use async_trait::async_trait;
     use jcode_tool_core::ToolExecutionMode;
     use std::fs;
 
@@ -360,10 +478,17 @@ mod tests {
         }
     }
 
-    fn write_tools(dir: &Path, json: Value) {
-        let path = dir.join(".jcode").join("tools.json");
+    fn write_tools_file(path: &Path, json: Value) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, json.to_string()).unwrap();
+    }
+
+    fn write_tools(dir: &Path, json: Value) {
+        write_tools_file(&dir.join(".jcode").join("tools.json"), json);
+    }
+
+    fn names(specs: &[ProjectToolSpec]) -> Vec<&str> {
+        specs.iter().map(|spec| spec.name.as_str()).collect()
     }
 
     #[test]
@@ -372,43 +497,239 @@ mod tests {
         write_tools(
             dir.path(),
             json!({"tools": [
-                {"name": "echo_json", "description": "echo", "command": ["/bin/sh", "-c", "cat"], "parameters": {"type": "object"}},
+                {"name": "echo_json", "description": "echo", "command": ["echo"]},
                 {"name": "bad name", "description": "x", "command": ["/bin/true"]},
                 {"name": "no_command", "description": "x"},
-                {"name": "no_description", "command": ["/bin/true"]}
+                {"name": "no_description", "command": ["/bin/true"]},
+                {"name": "bad_cwd", "description": "x", "command": ["/bin/true"], "cwd": "bogus"}
             ]}),
         );
-        let specs = load_specs(Some(dir.path()));
-        let names: Vec<_> = specs.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["echo_json"]);
+        let specs = load_specs_with_global(Some(dir.path()), None);
+        assert_eq!(names(&specs), vec!["echo_json"]);
         assert_eq!(specs[0].base_dir, fs::canonicalize(dir.path()).unwrap());
     }
 
     #[test]
     fn project_entry_overrides_global_name() {
+        let global = tempfile::tempdir().unwrap();
+        let global_path = global.path().join(".jcode").join("tools.json");
+        write_tools_file(
+            &global_path,
+            json!({"tools": [{"name": "x", "description": "global", "command": ["/bin/true"]}]}),
+        );
+        let project = tempfile::tempdir().unwrap();
+        write_tools(
+            project.path(),
+            json!({"tools": [{"name": "x", "description": "project", "command": ["/bin/true"]}]}),
+        );
+        let specs = load_specs_with_global(Some(project.path()), Some(&global_path));
+        assert_eq!(names(&specs), vec!["x"]);
+        assert_eq!(specs[0].description, "project");
+        assert_eq!(specs[0].base_dir, fs::canonicalize(project.path()).unwrap());
+    }
+
+    #[test]
+    fn without_working_dir_only_global_tools_load() {
+        let global = tempfile::tempdir().unwrap();
+        let global_path = global.path().join(".jcode").join("tools.json");
+        write_tools_file(
+            &global_path,
+            json!({"tools": [{"name": "global_only", "description": "x", "command": ["/bin/true"]}]}),
+        );
+        let specs = load_specs_with_global(None, Some(&global_path));
+        assert_eq!(names(&specs), vec!["global_only"]);
+    }
+
+    #[test]
+    fn global_entry_defaults_to_session_cwd() {
+        let global = tempfile::tempdir().unwrap();
+        let global_path = global.path().join(".jcode").join("tools.json");
+        write_tools_file(
+            &global_path,
+            json!({"tools": [{"name": "pwd", "description": "pwd", "command": ["/bin/pwd"]}]}),
+        );
+        let project = tempfile::tempdir().unwrap();
+        let session = tempfile::tempdir().unwrap();
+        let specs = load_specs_with_global(Some(project.path()), Some(&global_path));
+        assert_eq!(
+            specs[0].working_dir(&ctx(Some(session.path().to_path_buf()))),
+            fs::canonicalize(session.path()).unwrap()
+        );
+    }
+
+    #[test]
+    fn repo_entry_defaults_to_project_cwd() {
+        let project = tempfile::tempdir().unwrap();
+        write_tools(
+            project.path(),
+            json!({"tools": [{"name": "pwd", "description": "pwd", "command": ["/bin/pwd"]}]}),
+        );
+        let session = tempfile::tempdir().unwrap();
+        let specs = load_specs_with_global(Some(project.path()), None);
+        assert_eq!(
+            specs[0].working_dir(&ctx(Some(session.path().to_path_buf()))),
+            fs::canonicalize(project.path()).unwrap()
+        );
+    }
+
+    #[test]
+    fn relative_command_resolves_against_the_real_config_dir() {
+        let owner = tempfile::tempdir().unwrap();
+        write_tools(
+            owner.path(),
+            json!({"tools": [{"name": "run", "description": "run", "command": ["scripts/run.sh"]}]}),
+        );
+        let specs = load_specs_with_global(Some(owner.path()), None);
+        let expected = fs::canonicalize(owner.path())
+            .unwrap()
+            .join("scripts/run.sh");
+        assert_eq!(specs[0].program(), expected);
+    }
+
+    #[test]
+    fn global_relative_command_resolves_against_the_jcode_home() {
+        let home = tempfile::tempdir().unwrap();
+        let global_path = home.path().join("tools.json");
+        write_tools_file(
+            &global_path,
+            json!({"tools": [{"name": "run", "description": "run", "command": ["scripts/run.sh"]}]}),
+        );
+        let specs = load_specs_with_global(None, Some(&global_path));
+        let expected = fs::canonicalize(home.path())
+            .unwrap()
+            .join("scripts/run.sh");
+        assert_eq!(specs[0].program(), expected);
+    }
+
+    #[test]
+    fn global_tools_path_uses_jcode_home() {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("JCODE_HOME");
+        crate::env::set_var("JCODE_HOME", home.path());
+        let path = global_tools_path();
+        match previous {
+            Some(value) => crate::env::set_var("JCODE_HOME", value),
+            None => crate::env::remove_var("JCODE_HOME"),
+        }
+        assert_eq!(path, Some(home.path().join("tools.json")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_config_uses_the_owning_project_root() {
+        use std::os::unix::fs::symlink;
+
+        let owner = tempfile::tempdir().unwrap();
+        write_tools(
+            owner.path(),
+            json!({"tools": [{"name": "run", "description": "run", "command": ["scripts/run.sh"]}]}),
+        );
+        let feature = tempfile::tempdir().unwrap();
+        fs::create_dir_all(feature.path().join(".jcode")).unwrap();
+        symlink(
+            owner.path().join(".jcode").join("tools.json"),
+            feature.path().join(".jcode").join("tools.json"),
+        )
+        .unwrap();
+
+        let specs = load_specs_with_global(Some(feature.path()), None);
+        let expected = fs::canonicalize(owner.path())
+            .unwrap()
+            .join("scripts/run.sh");
+        assert_eq!(specs[0].base_dir, fs::canonicalize(owner.path()).unwrap());
+        assert_eq!(specs[0].program(), expected);
+    }
+
+    #[tokio::test]
+    async fn reload_replaces_project_tools_and_drops_removed_ones() {
+        let registry = Registry::empty();
+        let first = tempfile::tempdir().unwrap();
+        write_tools(
+            first.path(),
+            json!({"tools": [{"name": "alpha", "description": "x", "command": ["/bin/true"]}]}),
+        );
+        registry
+            .register_project_tools_with_global(Some(first.path().to_path_buf()), None)
+            .await;
+        assert_eq!(registry.tool_names().await, vec!["alpha"]);
+
+        write_tools(
+            first.path(),
+            json!({"tools": [{"name": "beta", "description": "x", "command": ["/bin/true"]}]}),
+        );
+        registry
+            .register_project_tools_with_global(Some(first.path().to_path_buf()), None)
+            .await;
+        assert_eq!(registry.tool_names().await, vec!["beta"]);
+
+        let second = tempfile::tempdir().unwrap();
+        write_tools(
+            second.path(),
+            json!({"tools": [{"name": "gamma", "description": "x", "command": ["/bin/true"]}]}),
+        );
+        registry
+            .register_project_tools_with_global(Some(second.path().to_path_buf()), None)
+            .await;
+        assert_eq!(registry.tool_names().await, vec!["gamma"]);
+
+        fs::remove_file(first.path().join(".jcode").join("tools.json")).unwrap();
+        registry
+            .register_project_tools_with_global(Some(first.path().to_path_buf()), None)
+            .await;
+        assert!(registry.tool_names().await.is_empty());
+    }
+
+    struct DummyTool;
+
+    #[async_trait]
+    impl Tool for DummyTool {
+        fn name(&self) -> &str {
+            "mcp"
+        }
+
+        fn description(&self) -> &str {
+            "dummy"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+
+        async fn execute(&self, _input: Value, _ctx: ToolContext) -> Result<ToolOutput> {
+            Ok(ToolOutput::new("dummy"))
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_tool_name_wins_over_project_entry() {
+        let registry = Registry::empty();
+        registry
+            .register("mcp".to_string(), std::sync::Arc::new(DummyTool))
+            .await;
         let dir = tempfile::tempdir().unwrap();
         write_tools(
             dir.path(),
-            json!({"tools": [{"name": "x", "description": "project", "command": ["/bin/true"]}]}),
+            json!({"tools": [
+                {"name": "mcp", "description": "shadow attempt", "command": ["/bin/false"]},
+                {"name": "other", "description": "x", "command": ["/bin/true"]}
+            ]}),
         );
-        let mut specs = vec![ProjectToolSpec {
-            name: "x".into(),
-            description: "global".into(),
-            command: vec!["/bin/true".into()],
-            parameters: json!({"type": "object", "properties": {}}),
-            timeout: Duration::from_secs(1),
-            cwd: CwdMode::Project,
-            env: BTreeMap::new(),
-            base_dir: dir.path().to_path_buf(),
-        }];
-        for spec in load_specs(Some(dir.path())) {
-            merge_spec(&mut specs, spec);
-        }
-        let x = specs.iter().filter(|s| s.name == "x").collect::<Vec<_>>();
-        assert_eq!(x.len(), 1);
-        assert_eq!(x[0].description, "project");
+        registry
+            .register_project_tools_with_global(Some(dir.path().to_path_buf()), None)
+            .await;
+
+        let mut names = registry.tool_names().await;
+        names.sort();
+        assert_eq!(names, vec!["mcp", "other"]);
+        let output = registry
+            .execute("mcp", json!({}), ctx(None))
+            .await
+            .unwrap();
+        assert_eq!(output.output, "dummy");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn passes_input_on_stdin_and_returns_stdout() {
         let dir = tempfile::tempdir().unwrap();
@@ -416,7 +737,7 @@ mod tests {
             dir.path(),
             json!({"tools": [{"name": "echo_json", "description": "echo", "command": ["/bin/sh", "-c", "cat"], "timeout_secs": 5}]}),
         );
-        let spec = load_specs(Some(dir.path())).remove(0);
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
         let tool = ProjectTool::new(spec);
         let out = tool
             .execute(json!({"hello": "world"}), ctx(Some(dir.path().to_path_buf())))
@@ -425,6 +746,51 @@ mod tests {
         assert_eq!(out.output.trim(), r#"{"hello":"world"}"#);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn strips_intent_and_accept_large_output_from_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tools(
+            dir.path(),
+            json!({"tools": [{"name": "echo_json", "description": "echo", "command": ["/bin/sh", "-c", "cat"], "timeout_secs": 5}]}),
+        );
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
+        let out = ProjectTool::new(spec)
+            .execute(
+                json!({"hello": "world", "intent": "why", "accept_large_output": true}),
+                ctx(Some(dir.path().to_path_buf())),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.output.trim(), r#"{"hello":"world"}"#);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn keeps_intent_when_the_schema_declares_it() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tools(
+            dir.path(),
+            json!({"tools": [{
+                "name": "echo_json",
+                "description": "echo",
+                "command": ["/bin/sh", "-c", "cat"],
+                "parameters": {"type": "object", "properties": {"intent": {"type": "string"}}},
+                "timeout_secs": 5
+            }]}),
+        );
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
+        let out = ProjectTool::new(spec)
+            .execute(
+                json!({"hello": "world", "intent": "keep"}),
+                ctx(Some(dir.path().to_path_buf())),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.output.trim(), r#"{"hello":"world","intent":"keep"}"#);
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn nonzero_exit_is_an_error_with_output() {
         let dir = tempfile::tempdir().unwrap();
@@ -432,7 +798,7 @@ mod tests {
             dir.path(),
             json!({"tools": [{"name": "fail", "description": "fail", "command": ["/bin/sh", "-c", "echo nope >&2; exit 3"], "timeout_secs": 5}]}),
         );
-        let spec = load_specs(Some(dir.path())).remove(0);
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
         let err = ProjectTool::new(spec)
             .execute(json!({}), ctx(Some(dir.path().to_path_buf())))
             .await
@@ -442,6 +808,7 @@ mod tests {
         assert!(err.contains("nope"), "{err}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn timeout_kills_and_reports() {
         let dir = tempfile::tempdir().unwrap();
@@ -449,7 +816,7 @@ mod tests {
             dir.path(),
             json!({"tools": [{"name": "slow", "description": "slow", "command": ["/bin/sh", "-c", "sleep 5"], "timeout_secs": 1}]}),
         );
-        let spec = load_specs(Some(dir.path())).remove(0);
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
         let start = std::time::Instant::now();
         let err = ProjectTool::new(spec)
             .execute(json!({}), ctx(Some(dir.path().to_path_buf())))
@@ -460,6 +827,29 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(4));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdin_write_is_inside_the_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tools(
+            dir.path(),
+            json!({"tools": [{"name": "slow", "description": "slow", "command": ["/bin/sh", "-c", "sleep 5"], "timeout_secs": 1}]}),
+        );
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
+        let start = std::time::Instant::now();
+        // Larger than any plausible pipe buffer. The old implementation wrote
+        // stdin before starting the timeout and could hang here forever.
+        let input = json!({"blob": "x".repeat(1024 * 1024)});
+        let err = ProjectTool::new(spec)
+            .execute(input, ctx(Some(dir.path().to_path_buf())))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("timed out"), "{err}");
+        assert!(start.elapsed() < Duration::from_secs(4));
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn cwd_mode_session_runs_in_the_session_dir() {
         let project = tempfile::tempdir().unwrap();
@@ -468,7 +858,7 @@ mod tests {
             project.path(),
             json!({"tools": [{"name": "pwd", "description": "pwd", "command": ["/bin/pwd"], "cwd": "session", "timeout_secs": 5}]}),
         );
-        let spec = load_specs(Some(project.path())).remove(0);
+        let spec = load_specs_with_global(Some(project.path()), None).remove(0);
         let out = ProjectTool::new(spec)
             .execute(json!({}), ctx(Some(session.path().to_path_buf())))
             .await
@@ -477,15 +867,24 @@ mod tests {
         assert_eq!(out.output.trim(), expected.to_string_lossy());
     }
 
-    #[test]
-    fn relative_command_resolves_against_the_real_config_dir() {
-        let owner = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn large_output_is_capped_while_being_read() {
+        let dir = tempfile::tempdir().unwrap();
         write_tools(
-            owner.path(),
-            json!({"tools": [{"name": "run", "description": "run", "command": ["scripts/run.sh"]}]}),
+            dir.path(),
+            json!({"tools": [{"name": "big", "description": "big", "command": ["/bin/sh", "-c", "dd if=/dev/zero bs=1024 count=300 2>/dev/null | tr '\\000' x"], "timeout_secs": 5}]}),
         );
-        let specs = load_specs(Some(owner.path()));
-        let expected = fs::canonicalize(owner.path()).unwrap().join("scripts/run.sh");
-        assert_eq!(specs[0].program(), expected);
+        let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
+        let out = ProjectTool::new(spec)
+            .execute(json!({}), ctx(Some(dir.path().to_path_buf())))
+            .await
+            .unwrap();
+        assert!(out.output.contains("[truncated"), "{}", out.output);
+        assert!(
+            out.output.len() <= MAX_RESULT_BYTES + 128,
+            "capped output was {} bytes",
+            out.output.len()
+        );
     }
 }

@@ -160,6 +160,14 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// Whether this tool was declared by a repository's `.jcode/tools.json`.
+    ///
+    /// The registry uses this to replace project-defined tools on reload
+    /// without touching built-ins, MCP tools, or SDK overlays.
+    fn is_project_tool(&self) -> bool {
+        false
+    }
+
     /// Whether to advertise this tool to the model. Compatibility-only tools
     /// can remain executable without adding a redundant API definition.
     fn model_visible(&self) -> bool {
