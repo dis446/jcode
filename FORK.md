@@ -34,7 +34,7 @@ pin, the config and the install entry point.
 | ID | Title | Status | Base | Upstream files touched | Patch | Plan | Upstreamable |
 | -- | ----- | ------ | ---- | ---------------------- | ----- | ---- | ------------ |
 | C1 | Native `@file` picker (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [patches/](patches/) (`git format-patch upstream/master..HEAD`) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
-| C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir`, one call at the top of `register_mcp_tools_for_dir`). New: `tool/project.rs`, `docs/PROJECT_TOOLS.md` | [patches/](patches/) | [doc](docs/PROJECT_TOOLS.md) | yes (new module + 2 thin hooks) |
+| C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tool-core`: `lib.rs` (`Tool::is_project_tool` default). `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir` + `_with_global`), `server/client_session.rs` (subscribe + two resume paths), `server/headless.rs`, `server.rs`, `server/worker_revive.rs`. Root `src/cli/commands.rs`. New: `tool/project.rs`, `docs/PROJECT_TOOLS.md`. Project registration is independent of MCP and runs after the fixed MCP tools at each session site. | [patches/](patches/) | [doc](docs/PROJECT_TOOLS.md) | yes (new module + thin hooks) |
 | C3 | `/new [name]` slash command (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.345-dev) | `jcode-tui`: `app/commands.rs` (`handle_session_command`), `app/commands_review.rs` (`reset_current_session` keeps working dir), `app/remote/key_handling.rs` (shared reset helper + `/new`), `app/state_ui_input_helpers.rs` (registry), `ui_overlays.rs` (help). New: `app/tests/new_session_command.rs` | [patches/](patches/) | n/a | yes (additive slash command) |
 | C4 | Live provider credit chip (DeepSeek/Moonshot balance) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.356-dev) | `jcode-base`: `usage.rs` (`mod balance;` + re-export), `usage/api_keys.rs` (`configured_key` becomes `pub(super)`; the DeepSeek/Moonshot balance fetch+parse bodies move into `usage/balance.rs`, and `/usage` calls the same functions the chip does). `jcode-config-types`: `display.rs` (`provider_balance`). `jcode-tui`: `tui/mod.rs` (module + `TuiState::provider_balance_chip`), `app.rs` (module + field), `app/tui_lifecycle.rs` (2 inits), `app/tui_state.rs`, `app/local.rs`, `app/remote.rs`, `ui_input.rs` (`draw_status` right-aligned chip). New: `jcode-base/src/usage/balance.rs`, `tui/provider_balance.rs`, `app/provider_balance.rs` | [patches/](patches/) | n/a | yes (new modules + thin hooks) |
 
@@ -48,14 +48,25 @@ C1 conflict hints: hooks sit beside `handle_command_suggestion_key` (two key pat
 in both paths, `autocomplete()` after `get_suggestions_for`, and the `draw_command_suggestions_overlay`
 call in `ui.rs`. If upstream adds a third key path, the e2e suite fails first.
 
-C2 verify: `cargo test -p jcode-app-core project::` (7 tests: load/merge/validation,
-stdin JSON, non-zero exit, timeout, `cwd: session`, relative command resolution), then a
-session rooted at a repo with `.jcode/tools.json` shows the declared tools in `/context`
-and calls them. `cargo check -p jcode-app-core --profile selfdev` is the fast gate.
-C2 conflict hints: the single hook is the first statement of
-`Registry::register_mcp_tools_for_dir` in `tool/mod.rs`; if upstream splits MCP
-registration per transport, add the project-tools call to each path that receives a
-session `working_dir`. `tool/project.rs` is new and cannot conflict.
+C2 verify: `cargo test -p jcode-app-core project::` (19 tests: load/merge/validation,
+invalid-entry isolation, global/project override, global-only when no working dir,
+global `session` cwd default, repo `project` cwd default, real-path symlink resolution,
+global config-root command resolution, `JCODE_HOME` path resolution, reload/removal,
+existing-tool collision, stdin JSON, intent stripping and opt-in, non-zero exit,
+timeout including a large stdin write, `cwd: session`, 128 KiB output cap; 9
+execution tests are Unix-only), then a session rooted at a repo with
+`.jcode/tools.json` shows the declared tools in `/context` and calls them.
+`cargo test -p jcode-tool-core` covers the new trait default.
+`cargo check -p jcode-app-core --profile selfdev` is the fast gate.
+C2 conflict hints: `tool/project.rs` is new and cannot conflict. `Tool::is_project_tool`
+is an additive default. Project registration must stay *after* the fixed MCP tools at
+each session site so `mcp`, `mcp_search`, and `mcp_call` cannot be shadowed. The call
+sites are the subscribe and resume paths in `server/client_session.rs`, plus
+`server/headless.rs`, `server.rs`, `server/worker_revive.rs`, and `src/cli/commands.rs`.
+If upstream adds a new session setup path, add `register_project_tools_for_dir` there.
+The 2026-10-29 fix added reload identity, stripped `intent`, honoured `JCODE_HOME`,
+decoupled project tools from every MCP opt-out, bounded the timeout around stdin, and
+made the global file default to session cwd.
 C3 verify: `cargo test -p jcode-tui --lib -- local_new remote_new new_is_registered`
 (10 tests: local `/new` and named, boundary rejection, name trimming, registry
 discovery, local/remote side-panel reset, local/remote busy refusal, and remote
