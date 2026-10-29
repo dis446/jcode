@@ -14,6 +14,7 @@ Determinism rules:
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import tempfile
@@ -44,6 +45,13 @@ class Session:
             if f.endswith("/"):
                 continue
             open(path, "w").close()
+        # A fresh HOME would otherwise open the first-run onboarding overlay,
+        # which swallows the keystrokes these suites type. `launch_count > 5`
+        # marks the install as established without copying any real state.
+        jcode_home = os.path.join(self.home, ".jcode")
+        os.makedirs(jcode_home, exist_ok=True)
+        with open(os.path.join(jcode_home, "setup_hints.json"), "w") as handle:
+            json.dump({"launch_count": 6}, handle)
         self.tmux_sock = os.path.join(self.root, "tmux.sock")
         self.name = "e2e" + uuid.uuid4().hex[:8]
         env = {
