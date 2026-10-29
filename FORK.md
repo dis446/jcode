@@ -5,29 +5,41 @@ behind `github.com/dis446/jcode`. We run a **pinned upstream plus our own custom
 work**; upgrading upstream is a deliberate, planned act. Nothing here updates
 jcode automatically.
 
+Custom work is deliberate and minimal. The default answer to a feature request
+is an existing upstream feature, an existing codebase primitive, or operator
+configuration, not new Rust. Adding Rust to the fork is a high bar.
+
 Everything about the fork lives **in this repo**: the ledger, the plans, the
 exported patches and the TUI regression suite. The dotfiles repo only holds the
 pin, the config and the install entry point.
 
 ## Rules
 
-1. **This repo is the source of truth.** `~/dotfiles/scripts/jcode-install.sh`
+1. **Prudence before code.** Start every change with "what is the best way to
+   deliver the operator's request?", not "what code do I add?". Work through
+   upstream behaviour/config, then an existing codebase primitive, then
+   operator config, skills, hooks, or dotfiles, and only then fork Rust. A code
+   change must extend the existing pattern and record in the ledger why the
+   earlier layers do not work. See "Feature-request prudence" in `AGENTS.md`.
+2. **This repo is the source of truth.** `~/dotfiles/scripts/jcode-install.sh`
    clones/updates this repo at its default branch (`master`) and builds it, so
    pushing here is what makes a version installable. `~/dotfiles/jcode/UPSTREAM_VERSION`
    records the upstream base release (no `v`) that `master` sits on, for planning
    the next upgrade.
-2. **`jcode update` is banned.** Upgrades follow the runbook below. In-app update
+3. **`jcode update` is banned.** Upgrades follow the runbook below. In-app update
    checks are off (`~/dotfiles/jcode/config.toml`: `check_updates = false`), and
    `up` in the shell never touches jcode.
-3. **Every custom change is tracked** in the ledger below *before* it is merged,
+4. **Every custom change is tracked** in the ledger below *before* it is merged,
    with its patch exported to `patches/`. No untracked local divergence.
-4. **Remotes:** `origin` = this fork, `upstream` = `1jehuang/jcode`. `master`
+5. **Remotes:** `origin` = this fork, `upstream` = `1jehuang/jcode`. `master`
    carries our commits on top of upstream `master`, kept as a small, rebased
    series; no long-lived feature branches.
-5. **Keep patches small and isolated.** Prefer new files/modules and thin hooks
-   into upstream code over editing existing functions. Smaller touch surface =
-   fewer conflicts. Note the upstream files each change touches.
-6. **Config/prompt/skills stay in dotfiles**, not here, wherever possible.
+6. **Keep patches small and isolated, and follow existing primitives.** Prefer
+   new files/modules and thin hooks into upstream code over editing existing
+   functions. Smaller touch surface = fewer conflicts. Extend the established
+   tool, session, config, hook, skill, storage, provider, or UI pattern instead
+   of adding a second one. Note the upstream files each change touches.
+7. **Config/prompt/skills stay in dotfiles**, not here, wherever possible.
 
 ## Ledger of custom work
 
@@ -48,6 +60,10 @@ C1 conflict hints: hooks sit beside `handle_command_suggestion_key` (two key pat
 in both paths, `autocomplete()` after `get_suggestions_for`, and the `draw_command_suggestions_overlay`
 call in `ui.rs`. If upstream adds a third key path, the e2e suite fails first.
 
+C2 best-way check: upstream behaviour/config and operator config cannot expose
+repo-declared commands as native tools. Project-local MCP is the closest
+primitive but forces a separate server and `mcp__<server>__` names. Chosen
+layer: minimal additive fork code, one new module plus thin hooks.
 C2 verify: `cargo test -p jcode-app-core project::` (19 tests: load/merge/validation,
 invalid-entry isolation, global/project override, global-only when no working dir,
 global `session` cwd default, repo `project` cwd default, real-path symlink resolution,
@@ -107,7 +123,11 @@ extract, or `--features linux-compat-vendored-openssl` with the perl modules ins
 
 ## Per-change entry (copy into the ledger and the patch header)
 
+- The best-way check: which layer in `AGENTS.md` "Feature-request prudence" this
+  change uses, and why the earlier layers do not fully work.
 - What and why, in two lines.
+- For fork code: the existing primitive or pattern it extends, and why extending
+  that primitive is not enough.
 - Upstream files/functions touched, and any upstream behaviour we rely on.
 - How to verify it still works (command or manual check).
 - Conflict hints: what to look for when upstream changes those files.

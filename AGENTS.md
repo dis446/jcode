@@ -4,6 +4,44 @@
 
 - Jcode Desktop is in a separate repository.
 
+## Feature-request prudence
+
+Before writing code, answer one question: what is the best way to deliver the
+operator's request? Adding Rust to this fork is a high bar, not the default.
+
+Work through these layers in order and stop at the first one that fully works:
+
+1. **Existing upstream behaviour or configuration.** Read the code, config
+   reference, and docs first. The request may already be a config key, hook,
+   skill, MCP route, SDK call, built-in tool, or slash command.
+2. **An existing primitive in this codebase.** Extend the established tool
+   registry, session setup, config, hook, skill, storage, provider, or UI path.
+   Do not add a parallel executor, config format, policy path, or lifecycle for
+   one workflow. Do not reimplement MCP, hooks, skills, or provider plumbing.
+3. **Operator-owned configuration.** Prefer a dotfiles config, prompt overlay,
+   skill, hook, command, or repo file when the behaviour belongs to an
+   operator, a repository, or a workflow.
+4. **Minimal additive fork code.** Only when layers 1-3 cannot deliver the
+   request. Add a small module plus thin hooks. Follow the existing
+   architecture, naming, error handling, logging, testing, and lifecycle.
+   Preserve upstream behaviour, including MCP support where upstream has it.
+5. **A new subsystem.** Rare. Requires a written justification and an explicit
+   operator decision.
+
+For layers 4-5, state in the plan, commit, and `FORK.md` entry:
+
+- why the earlier layers cannot fully satisfy the request;
+- which existing primitive or pattern this extends;
+- why this is the smallest patch that works;
+- what happens when upstream changes the files it touches.
+
+Do not add Rust because it is easier to write than a config change. Do not fork
+a feature upstream already ships. When two layers both work, choose the smaller
+one. If the trade-off is real, ask the operator before writing code.
+
+Correctness, security, and tests still come before size. "Smallest" means the
+smallest change that fully solves the request, not the fewest lines at any cost.
+
 ## TUI style
 
 - UI chrome must not wrap: startup headers, account rows, status labels, and
@@ -43,8 +81,9 @@ small rebased series on top of `upstream/master`. Do not create long-lived
 feature branches and do not run `jcode update`.
 
 - Record every custom change in the `FORK.md` ledger and export its patch to
-  `patches/`. Keep changes additive: new modules plus thin hooks into upstream
-  files.
+  `patches/`. Before adding code, apply the feature-request prudence ladder and
+  record the chosen layer. Keep changes additive: new modules plus thin hooks
+  into upstream files.
 - Upgrade by fetching `upstream`, rebasing `master`, resolving conflicts per the
   ledger hints, re-exporting patches, and updating the ledger base. The pinned
   upstream base is in `~/dotfiles/jcode/UPSTREAM_VERSION`.
