@@ -21,16 +21,16 @@ mod provider_fetch;
 mod remote_accounts;
 mod startup_snapshot;
 pub use accessors::*;
-pub use balance::{
-    BalanceChip, balance_profile, balance_profile_for_label, balance_profile_id_from_key,
-    fetch_balance,
-};
 pub use anthropic_reset::{
     AnthropicLimitResetOffer, AnthropicLimitResetOutcome, AnthropicLimitResetUnavailable,
     PendingAnthropicLimitReset, consume_anthropic_limit_reset,
     invalidate_anthropic_usage_reset_state, prepare_anthropic_limit_reset,
 };
 use api_keys::enqueue_api_key_usage_tasks;
+pub use balance::{
+    BalanceChip, LimitChip, ProviderChip, balance_profile, balance_profile_for_label,
+    balance_profile_id_from_key, fetch_chip,
+};
 use cache::*;
 pub use cache::{
     account_known_exhausted, cached_account_usage_snapshot, cached_account_usage_status_snapshot,

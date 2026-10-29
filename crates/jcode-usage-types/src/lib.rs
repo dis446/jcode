@@ -36,7 +36,7 @@ pub struct ProviderUsage {
     pub last_used_unix_secs: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UsageLimit {
     pub name: String,
     pub usage_percent: f32,

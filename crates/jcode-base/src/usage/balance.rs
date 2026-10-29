@@ -1,11 +1,13 @@
-//! Provider credit balances, shared by `/usage` and the live status chip.
+//! Provider credit balances and plan quotas, shared by `/usage` and the live
+//! status chip.
 //!
-//! `/usage` lists every connected provider and renders one row per balance
-//! field; the status chip only needs the remaining amount for the provider in
+//! `/usage` lists every connected provider and renders one row per balance or
+//! quota window; the status chip only needs the numbers for the provider in
 //! use. Both read the same response through the same fetch and parse helpers
-//! here, so the chip can never disagree with `/usage` about a balance.
+//! here, so the chip can never disagree with `/usage`.
 
 use anyhow::{Context, Result};
+use jcode_usage_types::UsageLimit;
 use std::time::Duration;
 
 use crate::provider_catalog::{self, OpenAiCompatibleProfile};
@@ -19,6 +21,8 @@ pub(super) struct BalanceSnapshot {
     pub lines: Vec<(String, String)>,
     /// `None` when the response carries no single remaining-credit number.
     pub amount: Option<BalanceAmount>,
+    /// Usage windows for providers that meter a plan instead of a balance.
+    pub limits: Vec<UsageLimit>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +56,67 @@ impl BalanceChip {
 
     pub fn is_exhausted(&self) -> bool {
         self.amount.is_finite() && self.amount <= 0.0
+    }
+}
+
+/// Plan usage windows for one provider, rendered as a single status row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LimitChip {
+    pub provider: String,
+    pub windows: Vec<UsageLimit>,
+}
+
+impl LimitChip {
+    /// Usage at or above this percent earns the warning color.
+    pub const LOW_PERCENT: f32 = 70.0;
+    /// Usage at or above this percent means the window is exhausted.
+    pub const EXHAUSTED_PERCENT: f32 = 100.0;
+
+    fn max_percent(&self) -> f32 {
+        self.windows
+            .iter()
+            .map(|window| window.usage_percent)
+            .fold(0.0, f32::max)
+    }
+
+    pub fn is_low(&self) -> bool {
+        self.windows
+            .iter()
+            .any(|window| window.usage_percent >= Self::LOW_PERCENT)
+    }
+
+    pub fn is_exhausted(&self) -> bool {
+        self.windows
+            .iter()
+            .any(|window| window.usage_percent >= Self::EXHAUSTED_PERCENT)
+    }
+
+    /// Highest window percentage, for logging and tests.
+    pub fn max_usage_percent(&self) -> f32 {
+        self.max_percent()
+    }
+}
+
+/// What the status chip can meter for the provider in use.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProviderChip {
+    Balance(BalanceChip),
+    Limits(LimitChip),
+}
+
+impl ProviderChip {
+    pub fn is_low(&self) -> bool {
+        match self {
+            Self::Balance(balance) => balance.is_low(),
+            Self::Limits(limits) => limits.is_low(),
+        }
+    }
+
+    pub fn is_exhausted(&self) -> bool {
+        match self {
+            Self::Balance(balance) => balance.is_exhausted(),
+            Self::Limits(limits) => limits.is_exhausted(),
+        }
     }
 }
 
@@ -104,12 +169,12 @@ pub fn balance_profile_id_from_key(key: &str) -> Option<&'static str> {
 }
 
 fn has_balance_endpoint(profile_id: &str) -> bool {
-    matches!(profile_id, "deepseek" | "moonshotai")
+    matches!(profile_id, "deepseek" | "moonshotai" | "opencode-go")
 }
 
-/// Fetch the live balance for one profile. `Ok(None)` means the provider has
-/// no balance API or no configured key, which is not an error.
-pub async fn fetch_balance(profile_id: &str) -> Result<Option<BalanceChip>> {
+/// Fetch the live balance or plan quota for one profile. `Ok(None)` means the
+/// provider has no metering API or no configured key, which is not an error.
+pub async fn fetch_chip(profile_id: &str) -> Result<Option<ProviderChip>> {
     let Some(profile) = balance_profile(profile_id) else {
         return Ok(None);
     };
@@ -123,16 +188,26 @@ pub async fn fetch_balance(profile_id: &str) -> Result<Option<BalanceChip>> {
             let resolved = provider_catalog::resolve_openai_compatible_profile(*profile);
             moonshot_snapshot(&api_key, &resolved.api_base).await?
         }
+        "opencode-go" => opencode_go_snapshot(&api_key).await?,
         _ => return Ok(None),
     };
+    if profile.id == "opencode-go" {
+        if snapshot.limits.is_empty() {
+            anyhow::bail!("no usage windows in response");
+        }
+        return Ok(Some(ProviderChip::Limits(LimitChip {
+            provider: profile.display_name.to_string(),
+            windows: snapshot.limits,
+        })));
+    }
     let Some(amount) = snapshot.amount else {
         anyhow::bail!("no numeric balance in response");
     };
-    Ok(Some(BalanceChip {
+    Ok(Some(ProviderChip::Balance(BalanceChip {
         provider: profile.display_name.to_string(),
         currency: amount.currency,
         amount: amount.amount,
-    }))
+    })))
 }
 
 async fn get_balance_json(url: &str, api_key: &str) -> Result<serde_json::Value> {
@@ -199,7 +274,57 @@ fn deepseek_snapshot_from_json(json: &serde_json::Value) -> Result<BalanceSnapsh
     if lines.is_empty() {
         anyhow::bail!("no balance info in response");
     }
-    Ok(BalanceSnapshot { lines, amount })
+    Ok(BalanceSnapshot {
+        lines,
+        amount,
+        limits: Vec::new(),
+    })
+}
+
+/// OpenCode Go exposes plan usage as percentages for its rolling 5-hour,
+/// weekly, and monthly windows. The endpoint is unofficial: there is no
+/// documented public API, so a failure keeps the last good chip rather than
+/// inventing numbers.
+pub(super) async fn opencode_go_snapshot(api_key: &str) -> Result<BalanceSnapshot> {
+    let json = get_balance_json("https://opencode.ai/zen/go/v1/usage", api_key).await?;
+    opencode_go_snapshot_from_json(&json)
+}
+
+fn opencode_go_snapshot_from_json(json: &serde_json::Value) -> Result<BalanceSnapshot> {
+    let usage = json
+        .get("usage")
+        .ok_or_else(|| anyhow::anyhow!("no usage in response"))?;
+    let mut limits = Vec::new();
+    for (key, name) in [
+        ("rolling", "5-hour"),
+        ("weekly", "Weekly"),
+        ("monthly", "Monthly"),
+    ] {
+        let Some(window) = usage.get(key) else {
+            continue;
+        };
+        let Some(percent) = window.get("percent").and_then(number) else {
+            continue;
+        };
+        let resets_at = ["resetsAt", "resets_at"].iter().find_map(|field| {
+            window
+                .get(*field)
+                .and_then(super::model::reset_timestamp_from_json_value)
+        });
+        limits.push(UsageLimit {
+            name: name.to_string(),
+            usage_percent: percent.clamp(0.0, 100.0) as f32,
+            resets_at,
+        });
+    }
+    if limits.is_empty() {
+        anyhow::bail!("no usage windows in response");
+    }
+    Ok(BalanceSnapshot {
+        lines: Vec::new(),
+        amount: None,
+        limits,
+    })
 }
 
 /// Moonshot exposes `GET /v1/users/me/balance` for plain API keys.
@@ -256,7 +381,11 @@ fn moonshot_snapshot_from_json(
     if lines.is_empty() {
         anyhow::bail!("no balance fields in response");
     }
-    Ok(BalanceSnapshot { lines, amount })
+    Ok(BalanceSnapshot {
+        lines,
+        amount,
+        limits: Vec::new(),
+    })
 }
 
 fn number(value: &serde_json::Value) -> Option<f64> {
@@ -280,6 +409,10 @@ mod tests {
         balance_profile("moonshotai").unwrap()
     }
 
+    fn opencode_go() -> &'static OpenAiCompatibleProfile {
+        balance_profile("opencode-go").unwrap()
+    }
+
     #[test]
     fn deepseek_snapshot_keeps_usage_rows_and_exposes_the_amount() {
         let snapshot = deepseek_snapshot_from_json(&json!({
@@ -296,7 +429,10 @@ mod tests {
         assert_eq!(
             snapshot.lines,
             vec![
-                ("Key status".to_string(), "valid (balance available)".to_string()),
+                (
+                    "Key status".to_string(),
+                    "valid (balance available)".to_string()
+                ),
                 (
                     "Balance".to_string(),
                     "28.11 USD (6.34 paid + 21.77 granted)".to_string()
@@ -355,11 +491,11 @@ mod tests {
         assert_eq!(
             snapshot.lines,
             vec![
+                ("Balance".to_string(), "120.00 CNY available".to_string()),
                 (
-                    "Balance".to_string(),
-                    "120.00 CNY available".to_string()
+                    "Key status".to_string(),
+                    "valid (balance available)".to_string()
                 ),
-                ("Key status".to_string(), "valid (balance available)".to_string()),
                 (
                     "Balance breakdown".to_string(),
                     "100.00 cash + 20.00 voucher CNY".to_string()
@@ -367,9 +503,54 @@ mod tests {
             ]
         );
         let amount = snapshot.amount.unwrap();
+        assert_eq!(format_amount(&amount.currency, amount.amount), "¥120.00");
+    }
+
+    #[test]
+    fn opencode_go_snapshot_parses_windows_and_resets() {
+        // Shape observed from GET https://opencode.ai/zen/go/v1/usage.
+        let snapshot = opencode_go_snapshot_from_json(&json!({
+            "usage": {
+                "rolling": {"status": "ok", "percent": 2, "resetsAt": "2026-10-29T16:30:36.000Z"},
+                "weekly": {"status": "ok", "percent": 20, "resetsAt": "2026-11-02T00:00:00.000Z"},
+                "monthly": {"status": "ok", "percent": 31, "resetsAt": "2026-11-14T11:06:07.000Z"}
+            }
+        }))
+        .unwrap();
+        assert!(snapshot.amount.is_none());
         assert_eq!(
-            format_amount(&amount.currency, amount.amount),
-            "¥120.00"
+            snapshot
+                .limits
+                .iter()
+                .map(|limit| (limit.name.as_str(), limit.usage_percent))
+                .collect::<Vec<_>>(),
+            vec![("5-hour", 2.0), ("Weekly", 20.0), ("Monthly", 31.0)]
+        );
+        assert_eq!(
+            snapshot.limits[0].resets_at.as_deref(),
+            Some("2026-10-29T16:30:36.000Z")
+        );
+        assert_eq!(
+            snapshot.limits[2].resets_at.as_deref(),
+            Some("2026-11-14T11:06:07.000Z")
+        );
+
+        let partial = opencode_go_snapshot_from_json(&json!({
+            "usage": {"rolling": {"percent": 105}}
+        }))
+        .unwrap();
+        assert_eq!(partial.limits.len(), 1);
+        assert_eq!(partial.limits[0].usage_percent, 100.0);
+        assert!(partial.limits[0].resets_at.is_none());
+    }
+
+    #[test]
+    fn opencode_go_snapshot_rejects_missing_windows() {
+        assert!(opencode_go_snapshot_from_json(&json!({})).is_err());
+        assert!(opencode_go_snapshot_from_json(&json!({"usage": {}})).is_err());
+        assert!(
+            opencode_go_snapshot_from_json(&json!({"usage": {"rolling": {"status": "ok"}}}))
+                .is_err()
         );
     }
 
@@ -379,21 +560,33 @@ mod tests {
             balance_profile_id_from_key("openai-compatible:deepseek"),
             Some("deepseek")
         );
-        assert_eq!(balance_profile_id_from_key("deepseek@work"), Some("deepseek"));
+        assert_eq!(
+            balance_profile_id_from_key("deepseek@work"),
+            Some("deepseek")
+        );
         assert_eq!(balance_profile_id_from_key("openrouter"), None);
         assert_eq!(balance_profile_id_from_key("openai-compatible:groq"), None);
+        assert_eq!(
+            balance_profile_id_from_key("openai-compatible:opencode-go"),
+            Some("opencode-go")
+        );
         assert_eq!(
             balance_profile_for_label("DeepSeek").map(|profile| profile.id),
             Some("deepseek")
         );
         assert_eq!(balance_profile_for_label("Groq"), None);
+        assert_eq!(
+            balance_profile_for_label("OpenCode Go").map(|profile| profile.id),
+            Some("opencode-go")
+        );
         assert_eq!(balance_profile("kimi"), None);
         assert_eq!(moonshot().id, "moonshotai");
+        assert_eq!(opencode_go().id, "opencode-go");
     }
 
     #[tokio::test]
     async fn providers_without_a_balance_endpoint_are_silent() {
-        assert!(fetch_balance("openrouter").await.unwrap().is_none());
+        assert!(fetch_chip("openrouter").await.unwrap().is_none());
     }
 
     /// Manual gate: needs a live key, so it stays out of the default run.
@@ -401,11 +594,39 @@ mod tests {
     #[tokio::test]
     #[ignore = "hits the live DeepSeek balance endpoint"]
     async fn live_deepseek_balance_round_trip() {
-        let chip = fetch_balance("deepseek")
+        let chip = match fetch_chip("deepseek")
             .await
             .expect("balance request should not fail")
-            .expect("a configured DeepSeek key should report a balance");
+            .expect("a configured DeepSeek key should report a balance")
+        {
+            ProviderChip::Balance(chip) => chip,
+            other => panic!("expected a balance chip, got {other:?}"),
+        };
         println!("live balance: {}", chip.label());
         assert!(chip.amount >= 0.0);
+    }
+
+    /// Manual gate: needs a live OpenCode Go key.
+    /// `cargo test -p jcode-base --lib usage::balance::tests::live_opencode -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "hits the unofficial OpenCode Go usage endpoint"]
+    async fn live_opencode_go_usage_round_trip() {
+        let chip = match fetch_chip("opencode-go")
+            .await
+            .expect("usage request should not fail")
+            .expect("a configured OpenCode Go key should report usage")
+        {
+            ProviderChip::Limits(chip) => chip,
+            other => panic!("expected a limits chip, got {other:?}"),
+        };
+        println!(
+            "live OpenCode Go windows: {:?}",
+            chip.windows
+                .iter()
+                .map(|window| (&window.name, window.usage_percent, &window.resets_at))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(chip.windows.len(), 3);
+        assert!(chip.max_usage_percent() <= 100.0);
     }
 }
