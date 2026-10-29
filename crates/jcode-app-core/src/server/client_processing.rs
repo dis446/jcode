@@ -460,6 +460,22 @@ pub(super) async fn cancel_processing_message(
         .as_deref()
         .unwrap_or(session_control.session_id.as_str())
         .to_string();
+    // CUSTOM (C8): input-line shells (including project commands) are
+    // detached from the turn task, so they have their own cancellation
+    // registry. Ctrl-C during a long `!cmd` used to leave the child running.
+    let mut cancelled_shells =
+        crate::input_shell_registry::cancel_session(&session_control.session_id);
+    if let Some(state_session_id) = state.session_id.as_deref()
+        && state_session_id != session_control.session_id
+    {
+        cancelled_shells += crate::input_shell_registry::cancel_session(state_session_id);
+    }
+    if cancelled_shells > 0 {
+        crate::logging::info(&format!(
+            "SERVER_INTERRUPT_CANCEL_SHELLS request_id={:?} session={} cancelled={cancelled_shells}",
+            request_id, session_label
+        ));
+    }
     // Stopping a session also stops the workers it spawned. This runs first
     // and on every path, including the idle one: a coordinator waiting on
     // `await_members` has no running turn of its own while its workers do.

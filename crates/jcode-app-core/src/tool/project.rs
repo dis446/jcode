@@ -34,12 +34,12 @@
 //! the files takes effect on the next attach.
 
 use super::{Tool, ToolContext, ToolOutput};
+use crate::project_config::{ConfigOwner, config_base_dir, read_config_file};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -50,7 +50,6 @@ const MAX_TIMEOUT_SECS: u64 = 3600;
 const MAX_RESULT_BYTES: usize = 128 * 1024;
 const READ_CHUNK_BYTES: usize = 8 * 1024;
 const MAX_NAME_LEN: usize = 64;
-const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_TOOLS: usize = 128;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 const MAX_PARAMETERS_BYTES: usize = 32 * 1024;
@@ -127,9 +126,7 @@ impl ProjectToolSpec {
             bail!("tool '{name}' has an empty description");
         }
         if description.len() > MAX_DESCRIPTION_BYTES {
-            bail!(
-                "tool '{name}' description exceeds {MAX_DESCRIPTION_BYTES} bytes"
-            );
+            bail!("tool '{name}' description exceeds {MAX_DESCRIPTION_BYTES} bytes");
         }
         if entry.command.is_empty() {
             bail!("tool '{name}' has no command");
@@ -149,9 +146,7 @@ impl ProjectToolSpec {
                         bail!("tool '{name}' parameters.required must be an array");
                     };
                     if !required.iter().all(Value::is_string) {
-                        bail!(
-                            "tool '{name}' parameters.required entries must be strings"
-                        );
+                        bail!("tool '{name}' parameters.required entries must be strings");
                     }
                 }
                 Value::Object(map)
@@ -160,9 +155,7 @@ impl ProjectToolSpec {
             None => json!({"type": "object", "properties": {}}),
         };
         if parameters.to_string().len() > MAX_PARAMETERS_BYTES {
-            bail!(
-                "tool '{name}' parameters exceed {MAX_PARAMETERS_BYTES} bytes"
-            );
+            bail!("tool '{name}' parameters exceed {MAX_PARAMETERS_BYTES} bytes");
         }
         let timeout_secs = entry
             .timeout_secs
@@ -223,60 +216,7 @@ pub(crate) fn global_tools_path() -> Option<PathBuf> {
 /// Read one tools file without following special files or unbounded growth.
 /// A missing file is silent; every other skip is logged and returns `None`.
 fn read_tools_config(path: &Path) -> Option<String> {
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(err) => {
-            crate::logging::warn(&format!(
-                "project tools: cannot inspect {}: {err}",
-                path.display()
-            ));
-            return None;
-        }
-    };
-    if !metadata.is_file() {
-        crate::logging::warn(&format!(
-            "project tools: ignoring {}: not a regular file",
-            path.display()
-        ));
-        return None;
-    }
-    if metadata.len() > MAX_CONFIG_BYTES {
-        crate::logging::warn(&format!(
-            "project tools: ignoring {}: larger than {MAX_CONFIG_BYTES} bytes",
-            path.display()
-        ));
-        return None;
-    }
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(err) => {
-            crate::logging::warn(&format!(
-                "project tools: cannot read {}: {err}",
-                path.display()
-            ));
-            return None;
-        }
-    };
-    let mut raw = String::new();
-    if let Err(err) = file
-        .take(MAX_CONFIG_BYTES + 1)
-        .read_to_string(&mut raw)
-    {
-        crate::logging::warn(&format!(
-            "project tools: cannot read {}: {err}",
-            path.display()
-        ));
-        return None;
-    }
-    if raw.len() as u64 > MAX_CONFIG_BYTES {
-        crate::logging::warn(&format!(
-            "project tools: ignoring {}: larger than {MAX_CONFIG_BYTES} bytes",
-            path.display()
-        ));
-        return None;
-    }
-    Some(raw)
+    read_config_file(path, "project tools")
 }
 
 /// Load global then project tool definitions. Project entries win on a name
@@ -286,23 +226,17 @@ pub(crate) fn load_specs_with_global(
     working_dir: Option<&Path>,
     global: Option<&Path>,
 ) -> Vec<ProjectToolSpec> {
-    #[derive(Clone, Copy)]
-    enum SourceKind {
-        Global,
-        Project,
-    }
-
-    let mut sources: Vec<(PathBuf, CwdMode, SourceKind)> = Vec::new();
+    let mut sources: Vec<(PathBuf, CwdMode, ConfigOwner)> = Vec::new();
     if let Some(path) = global {
         // A global tool belongs to the user's home, but it usually acts on the
         // project the session is in, so session cwd is the useful default.
-        sources.push((path.to_path_buf(), CwdMode::Session, SourceKind::Global));
+        sources.push((path.to_path_buf(), CwdMode::Session, ConfigOwner::Global));
     }
     if let Some(root) = working_dir {
         sources.push((
             root.join(".jcode").join("tools.json"),
             CwdMode::Project,
-            SourceKind::Project,
+            ConfigOwner::Project,
         ));
     }
 
@@ -312,16 +246,8 @@ pub(crate) fn load_specs_with_global(
             continue;
         };
         // Resolve the real path so a symlinked config runs its commands from
-        // the project that owns the file, not the link's location. A repo file
-        // at `<root>/.jcode/tools.json` belongs to `<root>`; a global file at
-        // `$JCODE_HOME/tools.json` belongs to `$JCODE_HOME`.
-        let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        let base_dir = match kind {
-            SourceKind::Global => real.parent(),
-            SourceKind::Project => real.parent().and_then(Path::parent),
-        }
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        // the project that owns the file, not the link's location.
+        let base_dir = config_base_dir(&path, kind);
         let file: ToolsFile = match serde_json::from_str(&raw) {
             Ok(file) => file,
             Err(err) => {
@@ -590,6 +516,7 @@ impl Tool for ProjectTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project_config::MAX_CONFIG_BYTES;
     use crate::tool::Registry;
     use async_trait::async_trait;
     use jcode_tool_core::ToolExecutionMode;
@@ -956,10 +883,7 @@ mod tests {
         let mut names = registry.tool_names().await;
         names.sort();
         assert_eq!(names, vec!["mcp", "other"]);
-        let output = registry
-            .execute("mcp", json!({}), ctx(None))
-            .await
-            .unwrap();
+        let output = registry.execute("mcp", json!({}), ctx(None)).await.unwrap();
         assert_eq!(output.output, "dummy");
     }
 
@@ -974,7 +898,10 @@ mod tests {
         let spec = load_specs_with_global(Some(dir.path()), None).remove(0);
         let tool = ProjectTool::new(spec);
         let out = tool
-            .execute(json!({"hello": "world"}), ctx(Some(dir.path().to_path_buf())))
+            .execute(
+                json!({"hello": "world"}),
+                ctx(Some(dir.path().to_path_buf())),
+            )
             .await
             .unwrap();
         assert_eq!(out.output.trim(), r#"{"hello":"world"}"#);

@@ -90,16 +90,26 @@ fn test_input_shell_request_roundtrip() -> Result<()> {
     let req = Request::InputShell {
         id: 88,
         command: "ls -la".to_string(),
+        cwd: Some("/tmp/project".to_string()),
+        timeout_secs: Some(30),
     };
     let json = serde_json::to_string(&req)?;
     assert!(json.contains("\"type\":\"input_shell\""));
     let decoded = parse_request_json(&json)?;
     assert_eq!(decoded.id(), 88);
-    let Request::InputShell { id, command } = decoded else {
+    let Request::InputShell {
+        id,
+        command,
+        cwd,
+        timeout_secs,
+    } = decoded
+    else {
         return Err(anyhow!("expected InputShell request"));
     };
     assert_eq!(id, 88);
     assert_eq!(command, "ls -la");
+    assert_eq!(cwd.as_deref(), Some("/tmp/project"));
+    assert_eq!(timeout_secs, Some(30));
     Ok(())
 }
 

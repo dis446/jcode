@@ -2603,8 +2603,21 @@ pub(super) async fn handle_client(
                 }
             }
 
-            Request::InputShell { id, command } => {
-                handle_input_shell(id, command, &agent, &client_event_tx);
+            Request::InputShell {
+                id,
+                command,
+                cwd,
+                timeout_secs,
+            } => {
+                handle_input_shell(
+                    id,
+                    command,
+                    cwd,
+                    timeout_secs,
+                    client_session_id.clone(),
+                    &agent,
+                    &client_event_tx,
+                );
             }
 
             // === Agent communication ===
