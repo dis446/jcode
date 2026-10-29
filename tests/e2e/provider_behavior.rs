@@ -946,3 +946,129 @@ async fn test_system_prompt_no_claude_code_identity() -> Result<()> {
 
     Ok(())
 }
+
+/// The interactive question tool survives the full server round trip: a client
+/// that advertises the capability receives the request, answers it, and the
+/// model sees the structured result.
+#[tokio::test]
+async fn ask_user_question_round_trip_through_server() -> Result<()> {
+    let _env = setup_test_env()?;
+    let runtime_dir = short_runtime_dir(format!(
+        "jcode-ask-question-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&runtime_dir)?;
+    let socket_path = runtime_dir.join("jcode.sock");
+    let debug_socket_path = runtime_dir.join("jcode-debug.sock");
+
+    let provider = MockProvider::new();
+    let tool_input = serde_json::json!({
+        "intent": "Choose the path",
+        "questions": [
+            {
+                "id": "task",
+                "question": "Which task?",
+                "options": [
+                    {"value": "bug", "label": "Bug fix", "next": "area"},
+                    {"value": "feature", "label": "New feature", "next": "area"}
+                ]
+            },
+            {
+                "id": "area",
+                "question": "Which area?",
+                "options": [{"value": "tui", "label": "TUI"}]
+            }
+        ]
+    })
+    .to_string();
+    provider.queue_response(vec![
+        StreamEvent::ToolUseStart {
+            id: "call-question".to_string(),
+            name: "ask_user_question".to_string(),
+        },
+        StreamEvent::ToolInputDelta(tool_input),
+        StreamEvent::ToolUseEnd,
+        StreamEvent::MessageEnd {
+            stop_reason: Some("tool_use".to_string()),
+        },
+    ]);
+    provider.queue_response(vec![
+        StreamEvent::TextDelta("Thanks for choosing.".to_string()),
+        StreamEvent::MessageEnd {
+            stop_reason: Some("end_turn".to_string()),
+        },
+    ]);
+
+    let provider: Arc<dyn jcode::provider::Provider> = Arc::new(provider);
+    let server_instance =
+        server::Server::new_with_paths(provider, socket_path.clone(), debug_socket_path.clone());
+    let server_handle = tokio::spawn(async move { server_instance.run().await });
+
+    let result = async {
+        wait_for_server_ready(&socket_path, &debug_socket_path).await?;
+        let mut client = server::Client::connect_with_path(socket_path.clone()).await?;
+        let subscribe_id = client.subscribe_for_questions().await?;
+        let _ = collect_until_done_unix(&mut client, subscribe_id).await?;
+
+        let message_id = client.send_message("ask me").await?;
+        let mut saw_question = false;
+        let mut final_text = String::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            let event = timeout(Duration::from_secs(2), client.read_event()).await??;
+            match event {
+                ServerEvent::UserQuestionRequest {
+                    request_id,
+                    tool_call_id,
+                    intent,
+                    root,
+                    questions,
+                } => {
+                    assert_eq!(tool_call_id, "call-question");
+                    assert_eq!(intent, "Choose the path");
+                    assert_eq!(root, "task");
+                    assert_eq!(questions.len(), 2);
+                    saw_question = true;
+                    client
+                        .send_user_question_response(
+                            &request_id,
+                            jcode::protocol::UserQuestionResult::Answered {
+                                answers: vec![
+                                    jcode::protocol::QuestionAnswer {
+                                        question_id: "task".into(),
+                                        selected: vec!["bug".into()],
+                                        custom: None,
+                                    },
+                                    jcode::protocol::QuestionAnswer {
+                                        question_id: "area".into(),
+                                        selected: vec!["tui".into()],
+                                        custom: None,
+                                    },
+                                ],
+                            },
+                        )
+                        .await?;
+                }
+                ServerEvent::TextDelta { text } => final_text.push_str(&text),
+                ServerEvent::Done { id } if id == message_id => break,
+                ServerEvent::Error { message, .. } => {
+                    anyhow::bail!("unexpected server error: {message}")
+                }
+                _ => {}
+            }
+        }
+        anyhow::ensure!(saw_question, "client never received the question request");
+        anyhow::ensure!(
+            final_text.contains("Thanks for choosing."),
+            "final text missing: {final_text:?}"
+        );
+        Ok(())
+    }
+    .await;
+
+    abort_server_and_cleanup(&server_handle, &socket_path, &debug_socket_path);
+    result
+}
