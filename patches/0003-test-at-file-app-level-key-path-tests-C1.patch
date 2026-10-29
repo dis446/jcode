@@ -1,0 +1,179 @@
+From d17d5cc921b3dc6f08f76c114cf815269c5a9744 Mon Sep 17 00:00:00 2001
+From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
+Date: Thu, 29 Oct 2026 11:28:38 +0800
+Subject: [PATCH 3/4] test(at-file): app-level key path tests [C1]
+
+---
+ crates/jcode-tui/src/tui/app/at_file.rs       |   2 +-
+ crates/jcode-tui/src/tui/app/tests.rs         |   1 +
+ .../src/tui/app/tests/at_file_picker.rs       | 133 ++++++++++++++++++
+ 3 files changed, 135 insertions(+), 1 deletion(-)
+ create mode 100644 crates/jcode-tui/src/tui/app/tests/at_file_picker.rs
+
+diff --git a/crates/jcode-tui/src/tui/app/at_file.rs b/crates/jcode-tui/src/tui/app/at_file.rs
+index 598fb6c13..092b81e0f 100644
+--- a/crates/jcode-tui/src/tui/app/at_file.rs
++++ b/crates/jcode-tui/src/tui/app/at_file.rs
+@@ -167,7 +167,7 @@ impl App {
+             KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::HYPER,
+         );
+         let len = state.items.len() as i32;
+-        let mut step = |state: &mut AtFileState, d: i32| {
++        let step = |state: &mut AtFileState, d: i32| {
+             state.selected = (state.selected as i32 + d).rem_euclid(len) as usize;
+         };
+         match code {
+diff --git a/crates/jcode-tui/src/tui/app/tests.rs b/crates/jcode-tui/src/tui/app/tests.rs
+index f23dc5be2..38f885651 100644
+--- a/crates/jcode-tui/src/tui/app/tests.rs
++++ b/crates/jcode-tui/src/tui/app/tests.rs
+@@ -64,6 +64,7 @@ include!("tests/issue_998_model_status_overlay.rs");
+ include!("tests/issue_1685_bounded_auto_resume.rs");
+ include!("tests/spinner_slash_commands.rs");
+ include!("tests/command_suggestions_cache.rs");
++include!("tests/at_file_picker.rs"); // CUSTOM (C1)
+ include!("tests/merge_command.rs");
+ include!("tests/skill_invocation_multi_word.rs");
+ include!("tests/remote_header_hint_facts.rs");
+diff --git a/crates/jcode-tui/src/tui/app/tests/at_file_picker.rs b/crates/jcode-tui/src/tui/app/tests/at_file_picker.rs
+new file mode 100644
+index 000000000..7a963f25c
+--- /dev/null
++++ b/crates/jcode-tui/src/tui/app/tests/at_file_picker.rs
+@@ -0,0 +1,133 @@
++// CUSTOM (fork ledger C1): `@file` popup behavior through the real key path.
++
++fn at_file_app(files: &[&str]) -> (App, tempfile::TempDir) {
++    let dir = tempfile::tempdir().unwrap();
++    for f in files {
++        let p = dir.path().join(f);
++        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
++        std::fs::write(p, "").unwrap();
++    }
++    let mut app = create_test_app();
++    app.session.working_dir = Some(dir.path().to_string_lossy().into_owned());
++    (app, dir)
++}
++
++fn type_str(app: &mut App, s: &str) {
++    for c in s.chars() {
++        app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
++    }
++    // Searches may finish on the idle tick.
++    for _ in 0..200 {
++        if app.at_file_pending.is_none() {
++            break;
++        }
++        std::thread::sleep(std::time::Duration::from_millis(5));
++        app.poll_at_file();
++    }
++}
++
++fn first_row(app: &App) -> Option<String> {
++    app.at_file_view().map(|v| v.rows[0].1.clone())
++}
++
++#[test]
++fn at_file_t_at_opens_popup_and_best_match_is_first() {
++    let (mut app, _d) = at_file_app(&["README.md", "src/main.rs"]);
++    type_str(&mut app, "@readm");
++    assert_eq!(first_row(&app).as_deref(), Some("README.md"));
++}
++
++#[test]
++fn at_file_t_email_does_not_open_popup() {
++    let (mut app, _d) = at_file_app(&["README.md"]);
++    type_str(&mut app, "mail me at x@rea");
++    assert!(app.at_file_view().is_none());
++}
++
++#[test]
++fn at_file_t_enter_accepts_and_does_not_submit() {
++    let (mut app, _d) = at_file_app(&["README.md"]);
++    type_str(&mut app, "see @readm");
++    app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
++    assert_eq!(app.input, "see @README.md ");
++    assert_eq!(app.cursor_pos, app.input.len());
++    assert!(app.at_file_view().is_none());
++    assert!(app.display_messages.iter().all(|m| !m.content.contains("README")));
++}
++
++#[test]
++fn at_file_t_tab_on_dir_keeps_drilling() {
++    let (mut app, _d) = at_file_app(&["src/main.rs", "src/lib.rs"]);
++    type_str(&mut app, "@sr");
++    app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
++    assert_eq!(app.input, "@src/");
++    let rows: Vec<_> = app.at_file_view().expect("popup stays open").rows;
++    assert!(rows.iter().any(|r| r.1 == "src/main.rs"));
++}
++
++#[test]
++fn at_file_t_esc_closes_popup_before_clearing_input() {
++    let (mut app, _d) = at_file_app(&["README.md"]);
++    type_str(&mut app, "@rea");
++    app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
++    assert!(app.at_file_view().is_none());
++    assert_eq!(app.input, "@rea");
++}
++
++#[test]
++fn at_file_t_up_down_move_selection_and_wrap() {
++    let (mut app, _d) = at_file_app(&["a1.rs", "a2.rs"]);
++    type_str(&mut app, "@a");
++    app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
++    assert_eq!(app.at_file_view().unwrap().selected, 1);
++    app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
++    assert_eq!(app.at_file_view().unwrap().selected, 0);
++    app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
++    assert_eq!(app.at_file_view().unwrap().selected, 1);
++}
++
++#[test]
++fn at_file_t_backspace_updates_and_closes() {
++    let (mut app, _d) = at_file_app(&["README.md"]);
++    type_str(&mut app, "@readm");
++    app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
++    assert!(app.at_file_view().is_some());
++    for _ in 0..4 {
++        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
++    }
++    assert_eq!(app.input, "@");
++    app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
++    assert!(app.at_file_view().is_none());
++}
++
++#[test]
++fn at_file_t_paste_never_opens_popup() {
++    let (mut app, _d) = at_file_app(&["README.md"]);
++    app.handle_paste("@readm".to_string());
++    assert!(app.at_file_view().is_none());
++}
++
++#[test]
++fn at_file_t_tab_forces_path_completion_on_plain_token() {
++    let (mut app, _d) = at_file_app(&["only_one.txt"]);
++    type_str(&mut app, "cat only_o");
++    app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
++    assert_eq!(app.input, "cat only_one.txt ");
++}
++
++#[test]
++fn at_file_t_slash_commands_unchanged() {
++    let (mut app, _d) = at_file_app(&["model.rs"]);
++    type_str(&mut app, "/mod");
++    assert!(app.at_file_view().is_none());
++    assert!(!app.command_suggestions().is_empty());
++}
++
++#[test]
++fn at_file_t_undo_restores_pre_completion_input() {
++    let (mut app, _d) = at_file_app(&["README.md"]);
++    type_str(&mut app, "@readm");
++    app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
++    app.undo_input_change();
++    assert_eq!(app.input, "@readm");
++}
+-- 
+2.56.0
+
