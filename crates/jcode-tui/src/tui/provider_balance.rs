@@ -266,6 +266,16 @@ mod tests {
     }
 
     #[test]
+    fn provider_limits_dispatch_builds_a_quota_chip() {
+        let chip = Chip::from_provider(ProviderChip::Limits(limits_chip(&[
+            ("5-hour", 12.0, None),
+            ("Weekly", 74.0, None),
+        ])));
+        assert_eq!(chip.label, "OpenCode Go 5h 12% · 1w 74%");
+        assert!(chip.low && !chip.exhausted);
+    }
+
+    #[test]
     fn disabling_or_switching_clears_the_chip() {
         let mut poller = Poller {
             profile: Some("deepseek".to_string()),
