@@ -1,6 +1,6 @@
 # Plan: `ask_user_question` with a branching question tree
 
-Status: implemented on `feat/ask-user-question`, in verification.
+Status: merged in `master`, installed and active on this host.
 Owner: jcode fork (ledger row C5).
 Scope: one new tool (`ask_user_question`) plus its TUI dialog. Supporting
 protocol and server plumbing only, no second tool.
