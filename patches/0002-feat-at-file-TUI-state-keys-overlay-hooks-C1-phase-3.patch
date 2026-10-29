@@ -1,7 +1,7 @@
-From 9c0fa0381f76aa52a74a384b9598710814a150cf Mon Sep 17 00:00:00 2001
+From 201afa7a8b57328b515d13b6e07c303977c947e0 Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 11:25:45 +0800
-Subject: [PATCH 2/4] feat(at-file): TUI state, keys, overlay, hooks [C1 phase
+Subject: [PATCH 2/8] feat(at-file): TUI state, keys, overlay, hooks [C1 phase
  3-6]
 
 ---
@@ -26,10 +26,10 @@ Subject: [PATCH 2/4] feat(at-file): TUI state, keys, overlay, hooks [C1 phase
  create mode 100644 crates/jcode-tui/src/tui/ui_input/at_file.rs
 
 diff --git a/Cargo.lock b/Cargo.lock
-index 5882e6b45..9455c5c15 100644
+index 5a50c9d0a..bb5b244e0 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -4406,6 +4406,7 @@ dependencies = [
+@@ -4273,6 +4273,7 @@ dependencies = [
   "hex",
   "image",
   "jcode-app-core",
@@ -143,10 +143,10 @@ index 649f018fd..6e9532c55 100644
  jcode-selfdev-types = { path = "../jcode-selfdev-types" }
  jcode-session-types = { path = "../jcode-session-types" }
 diff --git a/crates/jcode-tui/src/tui/app.rs b/crates/jcode-tui/src/tui/app.rs
-index 397eb45e5..17e75f5c1 100644
+index 5914e854f..8b8f8426e 100644
 --- a/crates/jcode-tui/src/tui/app.rs
 +++ b/crates/jcode-tui/src/tui/app.rs
-@@ -97,6 +97,7 @@ pub(crate) mod onboarding_graph;
+@@ -99,6 +99,7 @@ pub(crate) mod onboarding_graph;
  mod onboarding_repair;
  mod onboarding_sim;
  mod productivity;
@@ -154,7 +154,7 @@ index 397eb45e5..17e75f5c1 100644
  mod prompt_history;
  mod remote;
  mod remote_header_hint;
-@@ -1853,6 +1854,9 @@ pub struct App {
+@@ -1873,6 +1874,9 @@ pub struct App {
      workspace_client: super::workspace_client::WorkspaceClientState,
      /// Reverse prompt-history search overlay state (Ctrl+R). None = closed.
      prompt_history_search: Option<prompt_history::PromptHistorySearchState>,
@@ -413,10 +413,10 @@ index 000000000..598fb6c13
 +    }
 +}
 diff --git a/crates/jcode-tui/src/tui/app/input.rs b/crates/jcode-tui/src/tui/app/input.rs
-index abadfdee8..edadb6dbf 100644
+index c34a30a4e..8825e971e 100644
 --- a/crates/jcode-tui/src/tui/app/input.rs
 +++ b/crates/jcode-tui/src/tui/app/input.rs
-@@ -967,6 +967,12 @@ fn insert_input_text_with_undo(app: &mut App, text: &str, typed: bool) {
+@@ -832,6 +832,12 @@ fn insert_input_text_with_undo(app: &mut App, text: &str, typed: bool) {
  
      app.reset_tab_completion();
      app.sync_model_picker_preview_from_input();
@@ -429,7 +429,7 @@ index abadfdee8..edadb6dbf 100644
  }
  
  pub(super) fn handle_text_input(app: &mut App, text: &str) -> bool {
-@@ -2909,6 +2915,7 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
+@@ -2800,6 +2806,7 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
                  app.cursor_pos = prev;
                  app.reset_tab_completion();
                  app.sync_model_picker_preview_from_input();
@@ -437,7 +437,7 @@ index abadfdee8..edadb6dbf 100644
              }
              true
          }
-@@ -3226,6 +3233,11 @@ impl App {
+@@ -3117,6 +3124,11 @@ impl App {
              return Ok(());
          }
  
@@ -450,10 +450,10 @@ index abadfdee8..edadb6dbf 100644
              return Ok(());
          }
 diff --git a/crates/jcode-tui/src/tui/app/local.rs b/crates/jcode-tui/src/tui/app/local.rs
-index 915383615..edde0c766 100644
+index 5dd2d8b87..125fc5d18 100644
 --- a/crates/jcode-tui/src/tui/app/local.rs
 +++ b/crates/jcode-tui/src/tui/app/local.rs
-@@ -133,6 +133,7 @@ pub(super) fn handle_tick(app: &mut App) -> bool {
+@@ -135,6 +135,7 @@ pub(super) fn handle_tick(app: &mut App) -> bool {
      needs_redraw |= app.prune_irrelevant_background_tasks();
      needs_redraw |= app.refresh_side_panel_linked_content_if_due();
      needs_redraw |= app.poll_model_picker_load();
@@ -462,10 +462,10 @@ index 915383615..edde0c766 100644
      needs_redraw |= app.poll_session_picker_presence();
      needs_redraw |= app.onboarding_tick();
 diff --git a/crates/jcode-tui/src/tui/app/remote.rs b/crates/jcode-tui/src/tui/app/remote.rs
-index f220cf67d..22520c2d8 100644
+index a55b1393b..cdaa507f2 100644
 --- a/crates/jcode-tui/src/tui/app/remote.rs
 +++ b/crates/jcode-tui/src/tui/app/remote.rs
-@@ -200,6 +200,7 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
+@@ -209,6 +209,7 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
      needs_redraw |= app.prune_irrelevant_background_tasks();
      needs_redraw |= app.refresh_side_panel_linked_content_if_due();
      needs_redraw |= app.poll_model_picker_load();
@@ -474,10 +474,10 @@ index f220cf67d..22520c2d8 100644
      needs_redraw |= app.poll_session_picker_presence();
      needs_redraw |= app.onboarding_tick();
 diff --git a/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs b/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
-index d16593ef7..d3c134613 100644
+index 0231f5c0c..34c56fc47 100644
 --- a/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
 +++ b/crates/jcode-tui/src/tui/app/state_ui_input_helpers.rs
-@@ -1579,6 +1579,11 @@ impl App {
+@@ -1544,6 +1544,11 @@ impl App {
          // Get suggestions for current input
          let current_suggestions = self.get_suggestions_for(&self.input);
  
@@ -490,10 +490,10 @@ index d16593ef7..d3c134613 100644
          if let Some((ref base, idx)) = self.tab_completion_state.clone() {
              let base_suggestions = self.get_suggestions_for(base);
 diff --git a/crates/jcode-tui/src/tui/app/tui_lifecycle.rs b/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
-index 49ed8f2a9..f779d09a8 100644
+index 9e0ec57ea..e6d4af18c 100644
 --- a/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
 +++ b/crates/jcode-tui/src/tui/app/tui_lifecycle.rs
-@@ -750,6 +750,8 @@ impl App {
+@@ -719,6 +719,8 @@ impl App {
              last_overnight_card_refresh: None,
              workspace_client: crate::tui::workspace_client::WorkspaceClientState::default(),
              prompt_history_search: None,
@@ -502,7 +502,7 @@ index 49ed8f2a9..f779d09a8 100644
              persisted_prompt_history: None,
          };
  
-@@ -1235,6 +1237,8 @@ impl App {
+@@ -1210,6 +1212,8 @@ impl App {
              last_overnight_card_refresh: None,
              workspace_client: crate::tui::workspace_client::WorkspaceClientState::default(),
              prompt_history_search: None,
@@ -512,10 +512,10 @@ index 49ed8f2a9..f779d09a8 100644
          };
  
 diff --git a/crates/jcode-tui/src/tui/app/tui_state.rs b/crates/jcode-tui/src/tui/app/tui_state.rs
-index b0748c23b..99439d239 100644
+index 62060237f..76af3620b 100644
 --- a/crates/jcode-tui/src/tui/app/tui_state.rs
 +++ b/crates/jcode-tui/src/tui/app/tui_state.rs
-@@ -1021,6 +1021,10 @@ impl crate::tui::TuiState for App {
+@@ -1025,6 +1025,10 @@ impl crate::tui::TuiState for App {
          self.command_suggestion_selected
      }
  
@@ -527,10 +527,10 @@ index b0748c23b..99439d239 100644
          self.prompt_history_search_view()
      }
 diff --git a/crates/jcode-tui/src/tui/mod.rs b/crates/jcode-tui/src/tui/mod.rs
-index 72387de7c..76e2595d3 100644
+index e215f56a7..a9e3823a5 100644
 --- a/crates/jcode-tui/src/tui/mod.rs
 +++ b/crates/jcode-tui/src/tui/mod.rs
-@@ -865,6 +865,10 @@ pub trait TuiState {
+@@ -870,6 +870,10 @@ pub trait TuiState {
      fn prompt_history_search(&self) -> Option<PromptHistorySearchView> {
          None
      }
@@ -541,7 +541,7 @@ index 72387de7c..76e2595d3 100644
      fn active_skill(&self) -> Option<String>;
      fn subagent_status(&self) -> Option<String>;
      /// Progress of a currently-running batch tool call.
-@@ -1499,6 +1503,14 @@ pub struct PromptHistorySearchView {
+@@ -1398,6 +1402,14 @@ pub struct PromptHistorySearchView {
      pub selected: usize,
  }
  
@@ -557,10 +557,10 @@ index 72387de7c..76e2595d3 100644
  /// driven by the active onboarding flow phase. `Suggestions` is the default
  /// resting state (the starter prompt cards).
 diff --git a/crates/jcode-tui/src/tui/ui.rs b/crates/jcode-tui/src/tui/ui.rs
-index 6d9c92a8d..992fc53cd 100644
+index ae1d9772d..68d6ed6a0 100644
 --- a/crates/jcode-tui/src/tui/ui.rs
 +++ b/crates/jcode-tui/src/tui/ui.rs
-@@ -3570,6 +3570,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
+@@ -3586,6 +3586,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
      // over existing rows (blank space, pinned footer, or the transcript tail)
      // instead of reserving layout height and shoving everything around.
      input_ui::draw_command_suggestions_overlay(frame, app, chunks[7]);
@@ -569,7 +569,7 @@ index 6d9c92a8d..992fc53cd 100644
      // Ctrl+R reverse prompt-history search overlay (drawn after the command
      // palette so it wins when both could be visible).
 diff --git a/crates/jcode-tui/src/tui/ui_input.rs b/crates/jcode-tui/src/tui/ui_input.rs
-index a63e9ddf5..6fa957e70 100644
+index 9944b55ab..b1c0ecbb0 100644
 --- a/crates/jcode-tui/src/tui/ui_input.rs
 +++ b/crates/jcode-tui/src/tui/ui_input.rs
 @@ -1,3 +1,6 @@

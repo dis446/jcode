@@ -1,7 +1,7 @@
-From d17d5cc921b3dc6f08f76c114cf815269c5a9744 Mon Sep 17 00:00:00 2001
+From ca35140a847e53a225c4e0deea01cca4d79cf216 Mon Sep 17 00:00:00 2001
 From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
 Date: Thu, 29 Oct 2026 11:28:38 +0800
-Subject: [PATCH 3/4] test(at-file): app-level key path tests [C1]
+Subject: [PATCH 3/8] test(at-file): app-level key path tests [C1]
 
 ---
  crates/jcode-tui/src/tui/app/at_file.rs       |   2 +-
@@ -24,10 +24,10 @@ index 598fb6c13..092b81e0f 100644
          };
          match code {
 diff --git a/crates/jcode-tui/src/tui/app/tests.rs b/crates/jcode-tui/src/tui/app/tests.rs
-index f23dc5be2..38f885651 100644
+index f377e9cc4..142ff825f 100644
 --- a/crates/jcode-tui/src/tui/app/tests.rs
 +++ b/crates/jcode-tui/src/tui/app/tests.rs
-@@ -64,6 +64,7 @@ include!("tests/issue_998_model_status_overlay.rs");
+@@ -69,6 +69,7 @@ include!("tests/issue_998_model_status_overlay.rs");
  include!("tests/issue_1685_bounded_auto_resume.rs");
  include!("tests/spinner_slash_commands.rs");
  include!("tests/command_suggestions_cache.rs");
