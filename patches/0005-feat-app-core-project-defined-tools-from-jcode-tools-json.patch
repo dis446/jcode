@@ -1,0 +1,688 @@
+From f3b4bf0db11d7666baaaabea72af41c7aa6f4ba7 Mon Sep 17 00:00:00 2001
+From: Tsetsen-erdene Ganbaatar <dis446@yahoo.com>
+Date: Thu, 29 Oct 2026 13:08:34 +0800
+Subject: [PATCH] feat(app-core): project-defined tools from .jcode/tools.json
+
+Register a repository's declared commands as first-class tools, loaded from
+~/.jcode/tools.json and <working dir>/.jcode/tools.json. Tool input arrives as
+JSON on stdin; stdout is the result. Names, descriptions and JSON schemas are
+declared by the repo, so workflows no longer need an MCP server (and its
+mcp__<server>__ prefix) to get native tool names.
+---
+ FORK.md                                   |  10 +
+ crates/jcode-app-core/src/tool/mod.rs     |  39 ++
+ crates/jcode-app-core/src/tool/project.rs | 491 ++++++++++++++++++++++
+ docs/PROJECT_TOOLS.md                     |  71 ++++
+ 4 files changed, 611 insertions(+)
+ create mode 100644 crates/jcode-app-core/src/tool/project.rs
+ create mode 100644 docs/PROJECT_TOOLS.md
+
+diff --git a/FORK.md b/FORK.md
+index 77b1ab417..943836bd0 100644
+--- a/FORK.md
++++ b/FORK.md
+@@ -34,6 +34,7 @@ pin, the config and the install entry point.
+ | ID | Title | Status | Base | Upstream files touched | Patch | Plan | Upstreamable |
+ | -- | ----- | ------ | ---- | ---------------------- | ----- | ---- | ------------ |
+ | C1 | Native `@file` picker (pi parity) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-tui`: `app.rs`, `app/input.rs`, `app/local.rs`, `app/remote.rs`, `app/remote/key_handling.rs`, `app/state_ui_input_helpers.rs` (`autocomplete`), `app/tui_lifecycle.rs`, `app/tui_state.rs`, `tui/mod.rs` (`TuiState::at_file_view`), `tui/ui.rs`, `tui/ui_input.rs`. New: `crates/jcode-at-file`, `app/at_file.rs`, `ui_input/at_file.rs`. Root `Cargo.toml` (workspace member) | [patches/](patches/) (`git format-patch upstream/master..HEAD`) | [plan](plans/at-file-picker.md) | yes (additive, 1 new crate + ~14 one-line hooks) |
++| C2 | Project-defined tools (`.jcode/tools.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.339-dev) | `jcode-app-core`: `tool/mod.rs` (`mod project;`, `Registry::register_project_tools_for_dir`, one call at the top of `register_mcp_tools_for_dir`). New: `tool/project.rs`, `docs/PROJECT_TOOLS.md` | [patches/](patches/) | [doc](docs/PROJECT_TOOLS.md) | yes (new module + 2 thin hooks) |
+ 
+ Status: planned, in-progress, merged (in `master`), dropped, upstreamed
+ (delete from the series on next rebase). Add a row for every new change.
+@@ -44,6 +45,15 @@ C1 conflict hints: hooks sit beside `handle_command_suggestion_key` (two key pat
+ `input.rs` and remote `key_handling.rs`), `insert_input_text_with_undo` tail, the Backspace arms
+ in both paths, `autocomplete()` after `get_suggestions_for`, and the `draw_command_suggestions_overlay`
+ call in `ui.rs`. If upstream adds a third key path, the e2e suite fails first.
++
++C2 verify: `cargo test -p jcode-app-core project::` (7 tests: load/merge/validation,
++stdin JSON, non-zero exit, timeout, `cwd: session`, relative command resolution), then a
++session rooted at a repo with `.jcode/tools.json` shows the declared tools in `/context`
++and calls them. `cargo check -p jcode-app-core --profile selfdev` is the fast gate.
++C2 conflict hints: the single hook is the first statement of
++`Registry::register_mcp_tools_for_dir` in `tool/mod.rs`; if upstream splits MCP
++registration per transport, add the project-tools call to each path that receives a
++session `working_dir`. `tool/project.rs` is new and cannot conflict.
+ Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
+ extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
+ `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.
+diff --git a/crates/jcode-app-core/src/tool/mod.rs b/crates/jcode-app-core/src/tool/mod.rs
+index 737b023ff..9a83d3cda 100644
+--- a/crates/jcode-app-core/src/tool/mod.rs
++++ b/crates/jcode-app-core/src/tool/mod.rs
+@@ -40,6 +40,7 @@ mod name_suggestions;
+ mod open;
+ mod panel;
+ mod patch;
++mod project;
+ mod read;
+ pub(crate) mod sdk;
+ pub mod selfdev;
+@@ -1566,6 +1567,40 @@ impl Registry {
+     /// (`.mcp.json`, `.jcode/mcp.json`, `.claude/mcp.json`) against
+     /// `working_dir` instead of the server process cwd. Remote/client sessions
+     /// must pass their session working directory here (issue #420).
++    /// Register tools declared in `~/.jcode/tools.json` and
++    /// `<working_dir>/.jcode/tools.json` for this session. Collisions with an
++    /// already-registered tool are skipped: built-ins and MCP keep their names.
++    pub async fn register_project_tools_for_dir(&self, working_dir: Option<std::path::PathBuf>) {
++        let specs = project::load_specs(working_dir.as_deref());
++        if specs.is_empty() {
++            return;
++        }
++        let existing: HashSet<String> = self.tools.read().await.keys().cloned().collect();
++        let mut registered = 0usize;
++        for spec in specs {
++            if existing.contains(spec.name()) {
++                crate::logging::warn(&format!(
++                    "project tools: '{}' is already registered; skipping",
++                    spec.name()
++                ));
++                continue;
++            }
++            registered += 1;
++            self.register(
++                spec.name().to_string(),
++                Arc::new(project::ProjectTool::new(spec)),
++            )
++            .await;
++        }
++        crate::logging::info(&format!(
++            "project tools: registered {registered} tool(s) for working dir {}",
++            working_dir
++                .as_deref()
++                .map(|dir| dir.display().to_string())
++                .unwrap_or_else(|| "<none>".to_string())
++        ));
++    }
++
+     pub async fn register_mcp_tools_for_dir(
+         &self,
+         event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::protocol::ServerEvent>>,
+@@ -1573,6 +1608,10 @@ impl Registry {
+         session_id: Option<String>,
+         working_dir: Option<std::path::PathBuf>,
+     ) {
++        // Project-defined tools use the same session working directory as
++        // project-local MCP config, so one call site covers both.
++        self.register_project_tools_for_dir(working_dir.clone()).await;
++
+         use crate::mcp::McpManager;
+         use std::sync::Arc;
+         use tokio::sync::RwLock;
+diff --git a/crates/jcode-app-core/src/tool/project.rs b/crates/jcode-app-core/src/tool/project.rs
+new file mode 100644
+index 000000000..739853b64
+--- /dev/null
++++ b/crates/jcode-app-core/src/tool/project.rs
+@@ -0,0 +1,491 @@
++//! Project-defined tools from `.jcode/tools.json`.
++//!
++//! jcode ships two ways to add tools: MCP servers and SDK client-executed
++//! tools. Neither lets a repository declare a small local command as a
++//! first-class tool with its own name. This module does: every session loads
++//! `~/.jcode/tools.json` and then `<working_dir>/.jcode/tools.json`, and each
++//! entry becomes an ordinary tool.
++//!
++//! ```json
++//! {
++//!   "tools": [
++//!     {
++//!       "name": "feature_list",
++//!       "description": "List alpha features.",
++//!       "command": ["scripts/feature-workflow/feature-list"],
++//!       "parameters": {"type": "object", "properties": {}},
++//!       "timeout_secs": 120,
++//!       "cwd": "project"
++//!     }
++//!   ]
++//! }
++//! ```
++//!
++//! The tool input JSON is written to the command's stdin and its output is the
++//! tool result. `command` is an argv array (no shell); a relative first element
++//! resolves against the project root (the parent of `.jcode`), so a symlinked
++//! `.jcode/tools.json` runs commands from the project that owns the file.
++//! `cwd` is `project` (default) or `session`. Invalid entries are skipped with
++//! a warning: a broken tools file must never prevent a session from starting.
++
++use super::{Tool, ToolContext, ToolOutput};
++use anyhow::{Context, Result, bail};
++use async_trait::async_trait;
++use serde::Deserialize;
++use serde_json::{Value, json};
++use std::collections::BTreeMap;
++use std::path::{Path, PathBuf};
++use std::time::Duration;
++use tokio::io::AsyncWriteExt;
++use tokio::process::Command;
++
++const DEFAULT_TIMEOUT_SECS: u64 = 120;
++const MAX_TIMEOUT_SECS: u64 = 3600;
++const MAX_RESULT_BYTES: usize = 128 * 1024;
++const MAX_NAME_LEN: usize = 64;
++/// Generic flag jcode adds to every tool schema; the command should not see it.
++const ACCEPT_LARGE_OUTPUT: &str = "accept_large_output";
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
++#[serde(rename_all = "lowercase")]
++enum CwdMode {
++    #[default]
++    Project,
++    Session,
++}
++
++#[derive(Debug, Deserialize)]
++struct ToolsFile {
++    #[serde(default)]
++    tools: Vec<ToolEntry>,
++}
++
++#[derive(Debug, Deserialize)]
++struct ToolEntry {
++    name: String,
++    #[serde(default)]
++    description: String,
++    #[serde(default)]
++    command: Vec<String>,
++    #[serde(default)]
++    parameters: Option<Value>,
++    #[serde(default)]
++    timeout_secs: Option<u64>,
++    #[serde(default)]
++    cwd: CwdMode,
++    #[serde(default)]
++    env: BTreeMap<String, String>,
++}
++
++#[derive(Debug, Clone)]
++pub(crate) struct ProjectToolSpec {
++    name: String,
++    description: String,
++    command: Vec<String>,
++    parameters: Value,
++    timeout: Duration,
++    cwd: CwdMode,
++    env: BTreeMap<String, String>,
++    /// Project root that owns the config file; relative commands and the
++    /// default working directory resolve against it.
++    base_dir: PathBuf,
++}
++
++impl ProjectToolSpec {
++    pub(crate) fn name(&self) -> &str {
++        &self.name
++    }
++
++    fn validate(entry: ToolEntry, base_dir: &Path) -> Result<Self> {
++        let name = entry.name.trim().to_string();
++        if name.is_empty() || name.len() > MAX_NAME_LEN {
++            bail!("tool name must be 1..={MAX_NAME_LEN} characters");
++        }
++        if !name
++            .chars()
++            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
++        {
++            bail!("tool name '{name}' may only contain letters, digits, '_' and '-'");
++        }
++        let description = entry.description.trim().to_string();
++        if description.is_empty() {
++            bail!("tool '{name}' has an empty description");
++        }
++        if entry.command.is_empty() {
++            bail!("tool '{name}' has no command");
++        }
++        let parameters = match entry.parameters {
++            Some(Value::Object(map)) => {
++                if map.get("type").and_then(Value::as_str) != Some("object") {
++                    bail!("tool '{name}' parameters must have \"type\": \"object\"");
++                }
++                Value::Object(map)
++            }
++            Some(_) => bail!("tool '{name}' parameters must be a JSON object schema"),
++            None => json!({"type": "object", "properties": {}}),
++        };
++        let timeout_secs = entry
++            .timeout_secs
++            .unwrap_or(DEFAULT_TIMEOUT_SECS)
++            .clamp(1, MAX_TIMEOUT_SECS);
++        Ok(Self {
++            name,
++            description,
++            command: entry.command,
++            parameters,
++            timeout: Duration::from_secs(timeout_secs),
++            cwd: entry.cwd,
++            env: entry.env,
++            base_dir: base_dir.to_path_buf(),
++        })
++    }
++
++    fn program(&self) -> PathBuf {
++        let first = Path::new(&self.command[0]);
++        if first.is_absolute() {
++            return first.to_path_buf();
++        }
++        let local = self.base_dir.join(first);
++        if first.components().count() > 1 || local.exists() {
++            local
++        } else {
++            first.to_path_buf()
++        }
++    }
++
++    fn working_dir(&self, ctx: &ToolContext) -> PathBuf {
++        match self.cwd {
++            CwdMode::Session => ctx
++                .working_dir
++                .as_deref()
++                .map(PathBuf::from)
++                .unwrap_or_else(|| self.base_dir.clone()),
++            CwdMode::Project => self.base_dir.clone(),
++        }
++    }
++}
++
++/// Load global then project tool definitions. Project entries win on a name
++/// clash. A missing or malformed file never fails the session.
++pub(crate) fn load_specs(working_dir: Option<&Path>) -> Vec<ProjectToolSpec> {
++    let mut paths: Vec<PathBuf> = Vec::new();
++    if let Some(home) = dirs::home_dir() {
++        paths.push(home.join(".jcode").join("tools.json"));
++    }
++    let project_root = match working_dir {
++        Some(dir) => Some(dir.to_path_buf()),
++        None => std::env::current_dir().ok(),
++    };
++    if let Some(root) = project_root {
++        paths.push(root.join(".jcode").join("tools.json"));
++    }
++
++    let mut merged: Vec<ProjectToolSpec> = Vec::new();
++    for path in paths {
++        let Ok(raw) = std::fs::read_to_string(&path) else {
++            continue;
++        };
++        // Resolve the real path so a symlinked config runs its commands from
++        // the project that owns the file, not the link's location. The base is
++        // the project root: `<root>/.jcode/tools.json` -> `<root>`.
++        let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
++        let base_dir = real
++            .parent()
++            .and_then(Path::parent)
++            .map(Path::to_path_buf)
++            .unwrap_or_else(|| PathBuf::from("."));
++        let file: ToolsFile = match serde_json::from_str(&raw) {
++            Ok(file) => file,
++            Err(err) => {
++                crate::logging::warn(&format!(
++                    "project tools: ignoring {}: {err}",
++                    path.display()
++                ));
++                continue;
++            }
++        };
++        for entry in file.tools {
++            match ProjectToolSpec::validate(entry, &base_dir) {
++                Ok(spec) => merge_spec(&mut merged, spec),
++                Err(err) => crate::logging::warn(&format!(
++                    "project tools: skipping an entry in {}: {err}",
++                    path.display()
++                )),
++            }
++        }
++    }
++    merged
++}
++
++/// Project files are read after the global one, so a later spec replaces an
++/// earlier one with the same name.
++fn merge_spec(specs: &mut Vec<ProjectToolSpec>, spec: ProjectToolSpec) {
++    if let Some(existing) = specs.iter_mut().find(|s| s.name == spec.name) {
++        *existing = spec;
++    } else {
++        specs.push(spec);
++    }
++}
++
++pub(crate) struct ProjectTool {
++    spec: ProjectToolSpec,
++}
++
++impl ProjectTool {
++    pub(crate) fn new(spec: ProjectToolSpec) -> Self {
++        Self { spec }
++    }
++}
++
++fn cap_output(mut output: String) -> String {
++    if output.len() <= MAX_RESULT_BYTES {
++        return output;
++    }
++    let mut end = MAX_RESULT_BYTES;
++    while end > 0 && !output.is_char_boundary(end) {
++        end -= 1;
++    }
++    let omitted = output.len() - end;
++    output.truncate(end);
++    output.push_str(&format!("\n[truncated {omitted} bytes]"));
++    output
++}
++
++#[async_trait]
++impl Tool for ProjectTool {
++    fn name(&self) -> &str {
++        &self.spec.name
++    }
++
++    fn description(&self) -> &str {
++        &self.spec.description
++    }
++
++    fn parameters_schema(&self) -> Value {
++        self.spec.parameters.clone()
++    }
++
++    async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
++        let mut payload = match input {
++            Value::Object(map) => Value::Object(map),
++            _ => json!({}),
++        };
++        if let Value::Object(map) = &mut payload {
++            map.remove(ACCEPT_LARGE_OUTPUT);
++        }
++        let mut stdin_json = payload.to_string();
++        stdin_json.push('\n');
++
++        let program = self.spec.program();
++        let cwd = self.spec.working_dir(&ctx);
++        let mut command = Command::new(&program);
++        command
++            .args(&self.spec.command[1..])
++            .current_dir(&cwd)
++            .envs(&self.spec.env)
++            .stdin(std::process::Stdio::piped())
++            .stdout(std::process::Stdio::piped())
++            .stderr(std::process::Stdio::piped())
++            .kill_on_drop(true);
++
++        let mut child = command.spawn().with_context(|| {
++            format!(
++                "tool '{}' could not start {} (cwd {})",
++                self.spec.name,
++                program.display(),
++                cwd.display()
++            )
++        })?;
++        if let Some(mut stdin) = child.stdin.take() {
++            // A command that never reads stdin must not fail the call; a pipe
++            // error is reported by the process's own exit status.
++            let _ = stdin.write_all(stdin_json.as_bytes()).await;
++            drop(stdin);
++        }
++
++        let output = match tokio::time::timeout(self.spec.timeout, child.wait_with_output()).await {
++            Ok(result) => result.context("failed to wait for the project tool")?,
++            Err(_) => bail!(
++                "tool '{}' timed out after {}s",
++                self.spec.name,
++                self.spec.timeout.as_secs()
++            ),
++        };
++
++        let stdout = String::from_utf8_lossy(&output.stdout);
++        let stderr = String::from_utf8_lossy(&output.stderr);
++        let mut combined = stdout.trim_end().to_string();
++        if !stderr.trim().is_empty() {
++            if !combined.is_empty() {
++                combined.push('\n');
++            }
++            combined.push_str("[stderr]\n");
++            combined.push_str(stderr.trim_end());
++        }
++
++        if !output.status.success() {
++            let status = output
++                .status
++                .code()
++                .map(|code| code.to_string())
++                .unwrap_or_else(|| "signal".to_string());
++            bail!(
++                "tool '{}' exited with status {status}\n{}",
++                self.spec.name,
++                cap_output(combined)
++            );
++        }
++
++        Ok(ToolOutput::new(cap_output(combined))
++            .with_title(self.spec.name.clone())
++            .with_metadata(json!({"command": self.spec.command, "cwd": cwd})))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use jcode_tool_core::ToolExecutionMode;
++    use std::fs;
++
++    fn ctx(working_dir: Option<PathBuf>) -> ToolContext {
++        ToolContext {
++            session_id: "test".into(),
++            message_id: "test".into(),
++            tool_call_id: "test".into(),
++            working_dir,
++            stdin_request_tx: None,
++            graceful_shutdown_signal: None,
++            execution_mode: ToolExecutionMode::AgentTurn,
++        }
++    }
++
++    fn write_tools(dir: &Path, json: Value) {
++        let path = dir.join(".jcode").join("tools.json");
++        fs::create_dir_all(path.parent().unwrap()).unwrap();
++        fs::write(path, json.to_string()).unwrap();
++    }
++
++    #[test]
++    fn loads_project_tools_and_skips_invalid_entries() {
++        let dir = tempfile::tempdir().unwrap();
++        write_tools(
++            dir.path(),
++            json!({"tools": [
++                {"name": "echo_json", "description": "echo", "command": ["/bin/sh", "-c", "cat"], "parameters": {"type": "object"}},
++                {"name": "bad name", "description": "x", "command": ["/bin/true"]},
++                {"name": "no_command", "description": "x"},
++                {"name": "no_description", "command": ["/bin/true"]}
++            ]}),
++        );
++        let specs = load_specs(Some(dir.path()));
++        let names: Vec<_> = specs.iter().map(|s| s.name.as_str()).collect();
++        assert_eq!(names, vec!["echo_json"]);
++        assert_eq!(specs[0].base_dir, fs::canonicalize(dir.path()).unwrap());
++    }
++
++    #[test]
++    fn project_entry_overrides_global_name() {
++        let dir = tempfile::tempdir().unwrap();
++        write_tools(
++            dir.path(),
++            json!({"tools": [{"name": "x", "description": "project", "command": ["/bin/true"]}]}),
++        );
++        let mut specs = vec![ProjectToolSpec {
++            name: "x".into(),
++            description: "global".into(),
++            command: vec!["/bin/true".into()],
++            parameters: json!({"type": "object", "properties": {}}),
++            timeout: Duration::from_secs(1),
++            cwd: CwdMode::Project,
++            env: BTreeMap::new(),
++            base_dir: dir.path().to_path_buf(),
++        }];
++        for spec in load_specs(Some(dir.path())) {
++            merge_spec(&mut specs, spec);
++        }
++        let x = specs.iter().filter(|s| s.name == "x").collect::<Vec<_>>();
++        assert_eq!(x.len(), 1);
++        assert_eq!(x[0].description, "project");
++    }
++
++    #[tokio::test]
++    async fn passes_input_on_stdin_and_returns_stdout() {
++        let dir = tempfile::tempdir().unwrap();
++        write_tools(
++            dir.path(),
++            json!({"tools": [{"name": "echo_json", "description": "echo", "command": ["/bin/sh", "-c", "cat"], "timeout_secs": 5}]}),
++        );
++        let spec = load_specs(Some(dir.path())).remove(0);
++        let tool = ProjectTool::new(spec);
++        let out = tool
++            .execute(json!({"hello": "world"}), ctx(Some(dir.path().to_path_buf())))
++            .await
++            .unwrap();
++        assert_eq!(out.output.trim(), r#"{"hello":"world"}"#);
++    }
++
++    #[tokio::test]
++    async fn nonzero_exit_is_an_error_with_output() {
++        let dir = tempfile::tempdir().unwrap();
++        write_tools(
++            dir.path(),
++            json!({"tools": [{"name": "fail", "description": "fail", "command": ["/bin/sh", "-c", "echo nope >&2; exit 3"], "timeout_secs": 5}]}),
++        );
++        let spec = load_specs(Some(dir.path())).remove(0);
++        let err = ProjectTool::new(spec)
++            .execute(json!({}), ctx(Some(dir.path().to_path_buf())))
++            .await
++            .unwrap_err()
++            .to_string();
++        assert!(err.contains("status 3"), "{err}");
++        assert!(err.contains("nope"), "{err}");
++    }
++
++    #[tokio::test]
++    async fn timeout_kills_and_reports() {
++        let dir = tempfile::tempdir().unwrap();
++        write_tools(
++            dir.path(),
++            json!({"tools": [{"name": "slow", "description": "slow", "command": ["/bin/sh", "-c", "sleep 5"], "timeout_secs": 1}]}),
++        );
++        let spec = load_specs(Some(dir.path())).remove(0);
++        let start = std::time::Instant::now();
++        let err = ProjectTool::new(spec)
++            .execute(json!({}), ctx(Some(dir.path().to_path_buf())))
++            .await
++            .unwrap_err()
++            .to_string();
++        assert!(err.contains("timed out"), "{err}");
++        assert!(start.elapsed() < Duration::from_secs(4));
++    }
++
++    #[tokio::test]
++    async fn cwd_mode_session_runs_in_the_session_dir() {
++        let project = tempfile::tempdir().unwrap();
++        let session = tempfile::tempdir().unwrap();
++        write_tools(
++            project.path(),
++            json!({"tools": [{"name": "pwd", "description": "pwd", "command": ["/bin/pwd"], "cwd": "session", "timeout_secs": 5}]}),
++        );
++        let spec = load_specs(Some(project.path())).remove(0);
++        let out = ProjectTool::new(spec)
++            .execute(json!({}), ctx(Some(session.path().to_path_buf())))
++            .await
++            .unwrap();
++        let expected = fs::canonicalize(session.path()).unwrap();
++        assert_eq!(out.output.trim(), expected.to_string_lossy());
++    }
++
++    #[test]
++    fn relative_command_resolves_against_the_real_config_dir() {
++        let owner = tempfile::tempdir().unwrap();
++        write_tools(
++            owner.path(),
++            json!({"tools": [{"name": "run", "description": "run", "command": ["scripts/run.sh"]}]}),
++        );
++        let specs = load_specs(Some(owner.path()));
++        let expected = fs::canonicalize(owner.path()).unwrap().join("scripts/run.sh");
++        assert_eq!(specs[0].program(), expected);
++    }
++}
+diff --git a/docs/PROJECT_TOOLS.md b/docs/PROJECT_TOOLS.md
+new file mode 100644
+index 000000000..8f45156ae
+--- /dev/null
++++ b/docs/PROJECT_TOOLS.md
+@@ -0,0 +1,71 @@
++# Project-defined tools (`.jcode/tools.json`)
++
++A repository can declare local commands as first-class jcode tools, with the
++model-facing name, description and JSON schema chosen by the repository. This is
++the fork's C2 change; it exists so alpha's `feature_*` workflow tools are native
++jcode tools instead of MCP tools with an `mcp__server__` prefix.
++
++## Files
++
++Loaded in this order, per session:
++
++1. `~/.jcode/tools.json` (global)
++2. `<session working dir>/.jcode/tools.json` (project)
++
++A project entry replaces a global entry with the same name. Missing or malformed
++files are ignored (a warning is logged); they never stop a session from starting.
++Invalid entries are skipped individually. A name that is already registered
++(built-in, MCP, self-dev) is not overridden; the entry is skipped with a warning.
++
++## Format
++
++```json
++{
++  "tools": [
++    {
++      "name": "feature_list",
++      "description": "List alpha features.",
++      "command": ["scripts/feature-workflow/feature-list"],
++      "parameters": {"type": "object", "properties": {}},
++      "timeout_secs": 120,
++      "cwd": "project",
++      "env": {}
++    }
++  ]
++}
++```
++
++| Field | Required | Meaning |
++| --- | --- | --- |
++| `name` | yes | Tool name shown to the model. `[A-Za-z0-9_-]`, max 64 (provider limit). |
++| `description` | yes | What the tool does and when to use it. |
++| `command` | yes | argv array. No shell is involved. |
++| `parameters` | no | JSON Schema; must be `{"type":"object",...}`. Defaults to an empty object. |
++| `timeout_secs` | no | Kill the command after this many seconds. Default 120, clamped to 1..3600. |
++| `cwd` | no | `project` (default: the project root that owns the config file) or `session` (the session working dir). |
++| `env` | no | Extra environment variables for the command. |
++
++The tool input object is written to the command's stdin as one JSON line
++(`accept_large_output` is removed first). Exit 0 means success: stdout becomes
++the result, with stderr appended under `[stderr]` when present. A non-zero exit
++or a timeout is a tool error carrying the captured output. Results are capped at
++128 KiB.
++
++A relative `command[0]` resolves against the **project root** that owns the
++config file (its real path, so a symlinked `.jcode/tools.json` in a feature
++workspace runs the commands of the project that owns the file). A bare name with
++no path separator falls back to `PATH` when no local file of that name exists.
++
++## Security
++
++A project file is executable content, exactly like `AGENTS.md` plus `bash`: only
++open a repo whose `.jcode/` you trust. There is no shell interpretation, the
++environment is inherited, and jcode's `pre_tool` hooks still see each call under
++the declared tool name.
++
++## Example: qLab feature tools
++
++`.jcode/tools.json` declares `feature_start`, `feature_continue`, `feature_mr`,
++`feature_stop`, `feature_list` and `feature_link`. Each runs
++`scripts/feature-workflow/jcode-tool <action>`, a small JSON-stdin adapter over
++the existing scripts, which remain the source of truth.
+-- 
+2.56.0
+
