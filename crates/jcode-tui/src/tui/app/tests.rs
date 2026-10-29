@@ -69,6 +69,7 @@ include!("tests/issue_998_model_status_overlay.rs");
 include!("tests/issue_1685_bounded_auto_resume.rs");
 include!("tests/spinner_slash_commands.rs");
 include!("tests/command_suggestions_cache.rs");
+include!("tests/at_file_picker.rs"); // CUSTOM (C1)
 include!("tests/merge_command.rs");
 include!("tests/skill_invocation_multi_word.rs");
 include!("tests/remote_header_hint_facts.rs");
