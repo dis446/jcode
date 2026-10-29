@@ -1840,6 +1840,13 @@ pub(in crate::tui::app) async fn submit_remote_enter_input(
         }
 
         if trimmed == "/new" || trimmed.starts_with("/new ") {
+            if app.is_processing {
+                app.push_display_message(DisplayMessage::error(
+                    "Cannot start a new session while a turn is running. Press Esc or run /cancel first."
+                        .to_string(),
+                ));
+                return Ok(());
+            }
             let name = trimmed.strip_prefix("/new").unwrap_or_default().trim();
             let name = (!name.is_empty()).then(|| name.to_string());
             remote.clear().await?;
