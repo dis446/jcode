@@ -133,6 +133,11 @@ pub struct DisplayConfig {
     pub resume_recent_close_seconds: u64,
     /// Usage percentage wording: "left" (default) or "used".
     pub usage_display: String,
+    /// Show the active provider's remaining API credit at the status line's
+    /// right edge when that provider exposes a balance endpoint
+    /// (default: true).
+    #[serde(default = "default_true")]
+    pub provider_balance: bool,
 }
 impl Default for DisplayConfig {
     fn default() -> Self {
@@ -175,6 +180,7 @@ impl Default for DisplayConfig {
             resume_project_scope: false,
             resume_recent_close_seconds: 30,
             usage_display: "left".to_string(),
+            provider_balance: true,
         }
     }
 }

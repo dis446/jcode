@@ -1,6 +1,7 @@
 pub mod account_picker;
 pub(crate) mod app;
 pub mod justrust_status;
+pub mod provider_balance;
 
 #[derive(Clone)]
 pub struct ContextSnapshot {
@@ -745,6 +746,11 @@ pub trait TuiState {
     }
     /// Live build telemetry displayed below the pinned todo band.
     fn justrust_status(&self) -> Option<&justrust_status::StatusRow> {
+        None
+    }
+    /// Live credit balance for the provider in use, rendered at the status
+    /// line's right edge.
+    fn provider_balance_chip(&self) -> Option<&provider_balance::Chip> {
         None
     }
     /// Running and recently completed background tasks for the session.
