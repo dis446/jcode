@@ -2630,7 +2630,7 @@ pub async fn run_single_message_command(
     // prompt-cache miss) and connects in the background (connect-on-first-call).
     // For a short single-message run, startup latency is unchanged.
     // (#390, #206 Phase 2)
-    let run_working_dir = std::env::current_dir().ok();
+    let run_working_dir = run_working_dir_for_resume(resume_session);
     if run_command_mcp_enabled() {
         registry
             .register_mcp_tools_for_dir(None, None, None, run_working_dir.clone())
@@ -2645,9 +2645,8 @@ pub async fn run_single_message_command(
         // the agent runs. Warm runs skip this entirely and stay instant. (#390)
         wait_for_cold_cache_mcp_tools(&registry).await;
     }
-    // Project tools are independent of MCP and pass the process cwd explicitly:
-    // the no-working-dir path is reserved for long-lived daemon sessions where
-    // the process cwd is unrelated to the session.
+    // Project tools are independent of MCP. A resumed run must use the saved
+    // session directory, not the directory the command was launched from.
     registry
         .register_project_tools_for_dir(run_working_dir)
         .await;
@@ -2658,6 +2657,17 @@ pub async fn run_single_message_command(
     }
 
     run_single_message_with_agent(&mut agent, provider, message, emit_json, emit_ndjson).await
+}
+
+/// Resolve the working directory for `jcode run` before tools are registered.
+/// A resumed session keeps its saved directory; a fresh run uses the process
+/// cwd. Falling back to cwd keeps a missing/corrupt session from loading tools
+/// from an unrelated directory.
+fn run_working_dir_for_resume(resume_session: Option<&str>) -> Option<PathBuf> {
+    resume_session
+        .and_then(|session_id| session::Session::load(session_id).ok())
+        .and_then(|session| session.working_dir.map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok())
 }
 
 /// Provider id for `jcode run --json`/`--ndjson` output.
