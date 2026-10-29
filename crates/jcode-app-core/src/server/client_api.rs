@@ -73,6 +73,32 @@ impl Client {
         client_has_local_history: bool,
         allow_session_takeover: bool,
     ) -> Result<u64> {
+        self.subscribe_with_capabilities(
+            working_dir,
+            selfdev,
+            target_session_id,
+            client_has_local_history,
+            allow_session_takeover,
+            false,
+        )
+        .await
+    }
+
+    /// Subscribe as a client that can render the interactive question dialog.
+    pub async fn subscribe_for_questions(&mut self) -> Result<u64> {
+        self.subscribe_with_capabilities(None, None, None, false, false, true)
+            .await
+    }
+
+    async fn subscribe_with_capabilities(
+        &mut self,
+        working_dir: Option<String>,
+        selfdev: Option<bool>,
+        target_session_id: Option<String>,
+        client_has_local_history: bool,
+        allow_session_takeover: bool,
+        supports_user_question: bool,
+    ) -> Result<u64> {
         let id = self.next_id;
         self.next_id += 1;
         let working_dir = match working_dir {
@@ -84,7 +110,7 @@ impl Client {
             system_prompt: None,
             supports_pdf_panels: false,
             supports_user_response: false,
-            supports_user_question: false,
+            supports_user_question,
             supports_server_failover: false,
             id,
             working_dir: Some(working_dir),
@@ -97,6 +123,24 @@ impl Client {
             crash_on_disconnect: false,
             continue_on_disconnect: false,
             terminal_env: crate::terminal_launch::snapshot_client_terminal_env(),
+        };
+        let json = serde_json::to_string(&request)? + "\n";
+        self.writer.write_all(json.as_bytes()).await?;
+        Ok(id)
+    }
+
+    /// Resolve a pending `UserQuestionRequest`.
+    pub async fn send_user_question_response(
+        &mut self,
+        request_id: &str,
+        result: crate::protocol::UserQuestionResult,
+    ) -> Result<u64> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let request = Request::UserQuestionResponse {
+            id,
+            request_id: request_id.to_string(),
+            result,
         };
         let json = serde_json::to_string(&request)? + "\n";
         self.writer.write_all(json.as_bytes()).await?;

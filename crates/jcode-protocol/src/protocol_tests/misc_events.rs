@@ -807,9 +807,7 @@ fn user_question_request_and_response_roundtrip() -> Result<()> {
     let json = serde_json::to_string(&response)?;
     assert!(json.contains("\"type\":\"user_question_response\""));
     let Request::UserQuestionResponse {
-        request_id,
-        result,
-        ..
+        request_id, result, ..
     } = parse_request_json(&json)?
     else {
         return Err(anyhow!("expected UserQuestionResponse"));
