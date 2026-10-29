@@ -1935,6 +1935,7 @@ fn oversized_pasted_submit_is_rejected_and_preserves_input() {
 }
 
 include!("tests/clear_runtime_state.rs");
+include!("tests/new_session_command.rs");
 
 include!("tests/kv_cache_provider_identity.rs");
 
