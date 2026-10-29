@@ -14,7 +14,7 @@ use crate::provider_activity;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn configured_key(env_key: &str, env_file: &str) -> Option<String> {
+pub(super) fn configured_key(env_key: &str, env_file: &str) -> Option<String> {
     crate::provider_catalog::load_api_key_from_env_or_config(env_key, env_file)
 }
 

@@ -1115,7 +1115,45 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
         frame.render_widget(Paragraph::new(line.alignment(Alignment::Center)), area);
         return;
     }
+    let left_width = line.width();
     frame.render_widget(Paragraph::new(line), area);
+    draw_provider_balance_chip(frame, app.provider_balance_chip(), area, left_width);
+}
+
+/// Right-aligned provider credit chip. Dropped (never truncated or allowed to
+/// collide) when the left-hand status text already reaches it.
+fn draw_provider_balance_chip(
+    frame: &mut Frame,
+    chip: Option<&crate::tui::provider_balance::Chip>,
+    area: Rect,
+    left_width: usize,
+) {
+    let Some(chip) = chip else {
+        return;
+    };
+    if area.height == 0 || area.width < 12 {
+        return;
+    }
+    let color = if chip.exhausted {
+        rgb(255, 100, 100)
+    } else if chip.low {
+        rgb(255, 193, 7)
+    } else {
+        dim_color()
+    };
+    let line = Line::from(Span::styled(chip.label.clone(), Style::default().fg(color)));
+    let width = line.width() as u16;
+    // Keep a blank cell between the chip and the status text on its left.
+    if left_width.saturating_add(width as usize) + 2 > area.width as usize {
+        return;
+    }
+    let rect = Rect {
+        x: area.x + area.width - width - 1,
+        y: area.y,
+        width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(line), rect);
 }
 
 fn running_tool_header_spans(

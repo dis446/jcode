@@ -8,6 +8,7 @@ mod account_fetch;
 pub use account_fetch::fetch_oauth_account_usage;
 mod anthropic_reset;
 mod api_keys;
+mod balance;
 mod cache;
 mod disk_cache;
 mod display;
@@ -20,6 +21,10 @@ mod provider_fetch;
 mod remote_accounts;
 mod startup_snapshot;
 pub use accessors::*;
+pub use balance::{
+    BalanceChip, balance_profile, balance_profile_for_label, balance_profile_id_from_key,
+    fetch_balance,
+};
 pub use anthropic_reset::{
     AnthropicLimitResetOffer, AnthropicLimitResetOutcome, AnthropicLimitResetUnavailable,
     PendingAnthropicLimitReset, consume_anthropic_limit_reset,

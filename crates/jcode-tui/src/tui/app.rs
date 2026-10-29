@@ -119,6 +119,7 @@ mod usage_reset;
 mod voice_input;
 pub(crate) use state_ui_input_helpers::{registered_command_entries, registered_command_names};
 mod justrust_status;
+mod provider_balance;
 mod state_ui_maintenance;
 mod state_ui_messages;
 mod state_ui_runtime;
@@ -1571,6 +1572,8 @@ pub struct App {
     background_task_rows: Vec<crate::tui::BackgroundTaskRow>,
     /// Asynchronous, bounded queries of justrust's public live-status API.
     justrust_status: crate::tui::justrust_status::Poller,
+    /// Asynchronous, throttled queries of the active provider's credit balance.
+    provider_balance: crate::tui::provider_balance::Poller,
     last_side_panel_refresh: Option<Instant>,
     // Most recently persisted focus target for dictation routing.
     last_client_focus_recorded_at: Option<Instant>,
