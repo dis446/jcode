@@ -64,25 +64,38 @@ C2 best-way check: upstream behaviour/config and operator config cannot expose
 repo-declared commands as native tools. Project-local MCP is the closest
 primitive but forces a separate server and `mcp__<server>__` names. Chosen
 layer: minimal additive fork code, one new module plus thin hooks.
-C2 verify: `cargo test -p jcode-app-core project::` (19 tests: load/merge/validation,
-invalid-entry isolation, global/project override, global-only when no working dir,
-global `session` cwd default, repo `project` cwd default, real-path symlink resolution,
-global config-root command resolution, `JCODE_HOME` path resolution, reload/removal,
+C2 verify: `cargo test -p jcode-app-core project::` (27 tests: load/merge/validation,
+invalid-entry isolation, unknown-field rejection, malformed `properties`/`required`,
+oversized config/description/tool-count limits, non-regular config files,
+global/project override, global-only when no working dir, global `session` cwd
+default, repo `project` cwd default, real-path symlink resolution, global
+config-root command resolution, `JCODE_HOME` path resolution, reload/removal,
 existing-tool collision, stdin JSON, intent stripping and opt-in, non-zero exit,
-timeout including a large stdin write, `cwd: session`, 128 KiB output cap; 9
-execution tests are Unix-only), then a session rooted at a repo with
-`.jcode/tools.json` shows the declared tools in `/context` and calls them.
+stderr-first failure output, timeout including a large stdin write, graceful
+cancellation, `cwd: session`, 128 KiB output cap; 11 execution tests are
+Unix-only). `cargo test -p jcode --lib run_resume_uses_the_saved_session_working_dir`
+covers the resumed-run directory.
+Then a session rooted at a repo with `.jcode/tools.json` shows the declared tools
+in `/context` and calls them.
 `cargo test -p jcode-tool-core` covers the new trait default.
 `cargo check -p jcode-app-core --profile selfdev` is the fast gate.
+`e2e/run.py --binary <fork bin> --suite all` passes (23/23); the suite does not
+yet exercise project tools. The ambient call sites are compile-covered; there is
+no dedicated runner-level test for them yet.
 C2 conflict hints: `tool/project.rs` is new and cannot conflict. `Tool::is_project_tool`
 is an additive default. Project registration must stay *after* the fixed MCP tools at
 each session site so `mcp`, `mcp_search`, and `mcp_call` cannot be shadowed. The call
 sites are the subscribe and resume paths in `server/client_session.rs`, plus
-`server/headless.rs`, `server.rs`, `server/worker_revive.rs`, and `src/cli/commands.rs`.
-If upstream adds a new session setup path, add `register_project_tools_for_dir` there.
+`server/headless.rs`, `server.rs`, `server/worker_revive.rs`, the ambient runner
+(resume-dead and scheduled-child paths, plus global-only for a session-less cycle),
+and `src/cli/commands.rs` (resumed runs use the saved session directory). If
+upstream adds a new session setup path, add `register_project_tools_for_dir` there.
 The 2026-10-29 fix added reload identity, stripped `intent`, honoured `JCODE_HOME`,
 decoupled project tools from every MCP opt-out, bounded the timeout around stdin, and
-made the global file default to session cwd.
+made the global file default to session cwd. The second 2026-10-29 fix bounded config
+reads and tool counts, rejected unknown fields and malformed schemas, preserved stderr
+on failures, honoured graceful shutdown, warned when a late MCP tool replaces a project
+tool, and covered resumed and ambient sessions.
 C3 best-way check: upstream `new_terminal` and Alt+Space next-prompt routing
 open another session; `/clear` plus `/rename` needs two non-atomic commands and
 leaves the session briefly unnamed, and no config or skill can reset a session
