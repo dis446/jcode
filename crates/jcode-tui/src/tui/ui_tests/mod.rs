@@ -254,6 +254,9 @@ impl crate::tui::TuiState for TestState {
     fn project_command_entries(&self) -> Vec<(String, String)> {
         Vec::new()
     }
+    fn prompt_template_entries(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
     fn streaming_tokens(&self) -> (u64, u64) {
         (0, 0)
     }

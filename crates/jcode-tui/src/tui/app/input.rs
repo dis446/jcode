@@ -3946,6 +3946,15 @@ impl App {
             return;
         }
 
+        // Prompt templates expand into ordinary user text before skill
+        // resolution, so a template shadows a same-named skill. File drops stay
+        // plain input.
+        if parse_dropped_paths(&input).is_none()
+            && let Some(expanded) = super::commands_prompt::expand(self, &input)
+        {
+            input = expanded;
+        }
+
         // File drops remain ordinary input. Registry-aware resolution supports
         // multi-word skill names without weakening that guard.
         let initial_snapshot = self.current_skills_snapshot();

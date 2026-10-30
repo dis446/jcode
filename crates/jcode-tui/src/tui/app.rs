@@ -72,6 +72,7 @@ mod commands_improve;
 mod commands_overnight;
 mod commands_plan;
 mod commands_project;
+mod commands_prompt;
 mod commands_remote;
 mod commands_review;
 mod conversation_state;
@@ -823,6 +824,12 @@ pub(crate) struct ProjectCommandCache {
     commands: std::sync::Arc<Vec<crate::command::project::ProjectCommand>>,
 }
 
+/// Prompt templates resolved for one session working directory.
+pub(crate) struct PromptTemplateCache {
+    working_dir: Option<std::path::PathBuf>,
+    templates: std::sync::Arc<crate::prompt_template::PromptTemplateRegistry>,
+}
+
 /// Memoized result of [`App::command_suggestions`] for one exact input buffer.
 ///
 /// The suggestion list is read up to eight times per rendered frame (input
@@ -1038,6 +1045,9 @@ pub struct App {
     project_commands_cache: RefCell<Option<ProjectCommandCache>>,
     /// A destructive project command waiting for `y`.
     pending_project_confirm: Option<commands_project::ResolvedProjectCommand>,
+    /// Markdown prompt templates for the session's current working dir.
+    /// Reloaded when that directory changes or a slash command misses.
+    prompt_templates_cache: RefCell<Option<PromptTemplateCache>>,
     /// Per-input memo for `command_suggestions()`; see
     /// [`CommandSuggestionsCache`].
     command_suggestions_cache: RefCell<Option<CommandSuggestionsCache>>,

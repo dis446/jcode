@@ -355,6 +355,15 @@ impl App {
             }
         }
 
+        // Prompt templates sit between project commands and skills. The label
+        // stays generic like a skill's; descriptions render in /help.
+        for template in self.prompt_templates().list() {
+            let name = format!("/{}", template.name());
+            if seen.insert(name.clone()) {
+                commands.push((name, "Prompt template"));
+            }
+        }
+
         let skills = self.current_skills_snapshot();
         push_skill_commands(&mut commands, &mut seen, &skills);
 

@@ -966,6 +966,10 @@ impl crate::tui::TuiState for App {
             .collect()
     }
 
+    fn prompt_template_entries(&self) -> Vec<(String, String)> {
+        self.prompt_template_entries()
+    }
+
     fn streaming_tokens(&self) -> (u64, u64) {
         (
             self.streaming.streaming_input_tokens,
