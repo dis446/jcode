@@ -118,6 +118,41 @@ pub(in crate::tui::app) async fn submit_prepared_remote_input(
     remote: &mut RemoteConnection,
     prepared: input::PreparedInput,
 ) -> Result<()> {
+    let Some(prepared) = hold_remote_prompt_if_blocked(app, remote, prepared) else {
+        return Ok(());
+    };
+
+    if let Some(command) = input::extract_input_shell_command(&prepared.expanded) {
+        submit_remote_input_shell(app, remote, prepared.raw_input, command.to_string()).await?;
+        return Ok(());
+    }
+
+    deliver_remote_prompt(app, remote, prepared).await
+}
+
+/// Send an expanded prompt template as prompt text.
+///
+/// A template body must never be re-interpreted: a body that starts with `!`
+/// is a sentence, not a shell command, so this path skips the `!cmd` check that
+/// [`submit_prepared_remote_input`] applies to typed input.
+pub(in crate::tui::app) async fn submit_remote_template_prompt(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    prepared: input::PreparedInput,
+) -> Result<()> {
+    let Some(prepared) = hold_remote_prompt_if_blocked(app, remote, prepared) else {
+        return Ok(());
+    };
+    deliver_remote_prompt(app, remote, prepared).await
+}
+
+/// Park a prompt while the session is not ready to send it. Returns `None` when
+/// the prompt was stored for later dispatch.
+fn hold_remote_prompt_if_blocked(
+    app: &mut App,
+    remote: &RemoteConnection,
+    prepared: input::PreparedInput,
+) -> Option<input::PreparedInput> {
     if app.remote_model_switch_in_flight || app.auth_catalog_refresh_pending {
         app.pending_prompt_after_model_switch = Some(prepared);
         app.set_status_notice(if app.auth_catalog_refresh_pending {
@@ -125,7 +160,7 @@ pub(in crate::tui::app) async fn submit_prepared_remote_input(
         } else {
             "Prompt queued until model switch completes"
         });
-        return Ok(());
+        return None;
     }
 
     // Submitting before the bootstrap History payload has been applied is racy:
@@ -141,14 +176,16 @@ pub(in crate::tui::app) async fn submit_prepared_remote_input(
         );
         app.pending_prompt_before_history = Some(prepared);
         app.set_status_notice("Loading session...");
-        return Ok(());
+        return None;
     }
+    Some(prepared)
+}
 
-    if let Some(command) = input::extract_input_shell_command(&prepared.expanded) {
-        submit_remote_input_shell(app, remote, prepared.raw_input, command.to_string()).await?;
-        return Ok(());
-    }
-
+async fn deliver_remote_prompt(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    prepared: input::PreparedInput,
+) -> Result<()> {
     app.commit_pending_streaming_assistant_message();
     // A manually submitted prompt supersedes any armed post-error fallback
     // offer (and its staged resend): the user chose to continue differently.
@@ -188,6 +225,23 @@ pub(in crate::tui::app) async fn submit_remote_slash_input(
             .await?;
     if handled {
         return Ok(());
+    }
+
+    // Prompt templates are client-side text with arguments substituted, so they
+    // expand before the SSH gate and before skill resolution: a template shadows
+    // a same-named skill, and SSH sessions get them too. The expanded body is
+    // delivered as prompt text, never re-interpreted as a `!cmd`.
+    if let Some(expanded) = super::super::commands_prompt::expand(app, prepared.expanded.trim()) {
+        return submit_remote_template_prompt(
+            app,
+            remote,
+            input::PreparedInput {
+                raw_input: expanded.clone(),
+                expanded,
+                images: prepared.images,
+            },
+        )
+        .await;
     }
 
     if crate::tui::is_ssh_remote() {

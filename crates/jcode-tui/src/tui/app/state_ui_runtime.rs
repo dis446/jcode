@@ -87,7 +87,96 @@ impl App {
                 .iter()
                 .map(|command| format!("/{}", command.name())),
         );
+        names.extend(
+            self.prompt_templates()
+                .list()
+                .iter()
+                .map(|template| format!("/{}", template.name())),
+        );
         names
+    }
+
+    /// Prompt templates for the session's current working dir.
+    ///
+    /// Loaded on first use and reloaded when the working dir changes. Built-in
+    /// slash commands and project commands shadow a template of the same name:
+    /// the user typed a name that already belongs to a deterministic action, so
+    /// the template is dropped with a warning. Nothing executes at load.
+    pub(crate) fn prompt_templates(
+        &self,
+    ) -> std::sync::Arc<crate::prompt_template::PromptTemplateRegistry> {
+        let working_dir = self
+            .session
+            .working_dir
+            .as_deref()
+            .map(std::path::PathBuf::from);
+        // A remote client's stub session has no working dir until the first
+        // History payload arrives. Loading now would cache the wrong tree.
+        if self.is_remote && working_dir.is_none() {
+            return std::sync::Arc::new(crate::prompt_template::PromptTemplateRegistry::default());
+        }
+        if let Some(cache) = self.prompt_templates_cache.borrow().as_ref()
+            && cache.working_dir == working_dir
+        {
+            return std::sync::Arc::clone(&cache.templates);
+        }
+
+        let mut registry = crate::prompt_template::PromptTemplateRegistry::load_for_working_dir(
+            working_dir.as_deref(),
+        );
+        let builtins: std::collections::HashSet<&str> = super::registered_command_names()
+            .map(|name| name.trim_start_matches('/'))
+            .collect();
+        let project_commands: std::collections::HashSet<String> = self
+            .project_commands()
+            .iter()
+            .map(|command| command.name().to_string())
+            .collect();
+        let mut shadowed: Vec<(String, &'static str)> = Vec::new();
+        registry.retain(|template| {
+            if builtins.contains(template.name()) {
+                shadowed.push((template.name().to_string(), "built-in command"));
+                false
+            } else if project_commands.contains(template.name()) {
+                shadowed.push((template.name().to_string(), "project command"));
+                false
+            } else {
+                true
+            }
+        });
+        for (name, owner) in shadowed {
+            crate::logging::warn(&format!(
+                "prompt templates: '/{name}' is a {owner}; ignoring the template"
+            ));
+        }
+
+        let registry = std::sync::Arc::new(registry);
+        *self.prompt_templates_cache.borrow_mut() = Some(super::PromptTemplateCache {
+            working_dir,
+            templates: std::sync::Arc::clone(&registry),
+        });
+        self.invalidate_command_candidates_cache();
+        registry
+    }
+
+    /// Drop the template cache so the next lookup re-reads the prompt dirs.
+    pub(crate) fn reload_prompt_templates(&self) {
+        *self.prompt_templates_cache.borrow_mut() = None;
+        self.invalidate_command_candidates_cache();
+    }
+
+    /// `(name, description)` for the `/help` section, sorted by name.
+    pub(crate) fn prompt_template_entries(&self) -> Vec<(String, String)> {
+        self.prompt_templates()
+            .list()
+            .iter()
+            .map(|template| {
+                (
+                    format!("/{}", template.name()),
+                    template.description().to_string(),
+                )
+            })
+            .collect()
     }
 
     /// Re-read skills from disk for the active session working directory and
