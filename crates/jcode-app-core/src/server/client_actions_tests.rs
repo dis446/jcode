@@ -1222,6 +1222,21 @@ async fn input_shell_times_out_and_stops_the_child() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn input_shell_clamps_an_absurd_timeout_instead_of_panicking() {
+    // `Instant + Duration` panics on overflow, so an unchecked wire value would
+    // take down the handler task. The command itself finishes at once.
+    let result = super::run_input_shell(
+        "true".to_string(),
+        None,
+        Some(u64::MAX),
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    )
+    .await;
+    assert_eq!(result.exit_code, Some(0));
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn input_shell_cancels_and_stops_the_child() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("cancelled-finished");

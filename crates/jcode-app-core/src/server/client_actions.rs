@@ -228,6 +228,11 @@ enum ShellOutcome {
     Cancelled,
 }
 
+/// Upper bound for a client-supplied shell deadline, matching the
+/// project-command loader. `!cmd` sends `None` and keeps waiting until it
+/// finishes or is cancelled.
+const MAX_INPUT_SHELL_TIMEOUT_SECS: u64 = 3600;
+
 /// Run one input-line shell command with an optional timeout and cancellation.
 ///
 /// The child is spawned with `kill_on_drop`, so leaving the `select!` on a
@@ -240,6 +245,10 @@ pub(super) async fn run_input_shell(
     cancel: Arc<tokio::sync::Notify>,
 ) -> crate::message::InputShellResult {
     let started = Instant::now();
+    // The wire is a public surface, and project commands clamp the same field at
+    // load. A raw `u64::MAX` would overflow `Instant + Duration` and panic the
+    // handler task, so clamp the deadline here for every client.
+    let timeout_secs = timeout_secs.map(|secs| secs.clamp(1, MAX_INPUT_SHELL_TIMEOUT_SECS));
     let mut cmd = build_input_shell_command(&command);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
