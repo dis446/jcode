@@ -82,7 +82,7 @@ split into sections:
 - **Provider cache telemetry totals**: reported input, cache read, cache write,
   the reusable boundary sum, `cache_read_pct_of_effective_prompt`,
   `cache_write_pct_of_effective_prompt`, and
-  `cache_read_pct_of_optimal_input` (local sessions with no remote history).
+  `cache_read_pct_of_optimal_input` (when remote history has no cache reads).
   Values including unrecorded live usage are listed next to the committed ones.
 - **Current / live stream counters**: the in-flight request's input, output,
   cache read, cache creation, whether usage has been recorded, and stream state.
@@ -98,7 +98,7 @@ A classified miss is rendered as a system notice attached to the preceding
 response. The full notice looks like this:
 
 ```
-ℹ️ KV cache miss [low_read] [prefix unchanged] turn 4 call 2: 3K cached / 20K expected tokens: ~17K tokens resent (provider read 3K of the 20K-token prefix 41s after the previous call, within TTL 5m; no detected change to provider, model, account, system prompt, tools or message prefix; cause unconfirmed). See KV_CACHE_USAGE in logs.
+ℹ️ KV cache miss [low read] [prefix unchanged] turn 4 call 2: 3K cached / 20K expected tokens: ~17K tokens resent (provider read 3K of the 20K-token prefix 41s after the previous call, within TTL 5m; no detected change to provider, model, account, system prompt, tools or message prefix; cause unconfirmed). See KV_CACHE_USAGE in logs.
 ```
 
 The transcript footer condenses it to one line:
