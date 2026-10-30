@@ -19,9 +19,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-/// Tools never reachable from inside a script: itself (no recursion) and
-/// `batch` (pointless inside a script that already has `Promise.all`).
-const EXCLUDED: &[&str] = &["codemode", "batch"];
+/// Tools never reachable from inside a script: itself (no recursion),
+/// `batch` (pointless inside a script that already has `Promise.all`), and
+/// `ask_user_question` (it owns the turn until a human answers; the script's
+/// 3 s foreground budget would move the whole script to the background while
+/// the dialog is still open).
+const EXCLUDED: &[&str] = &["codemode", "batch", "ask_user_question"];
 
 /// Maximum characters of the final report returned to the model.
 const MAX_REPORT_CHARS: usize = 60_000;

@@ -117,6 +117,10 @@ answers, cancels, or `timeout_secs` elapses. Backgrounding it would end the tool
 call for the model while the dialog still owned the client, so the model would
 continue without the answer and the dialog would be dismissed.
 
+A question cannot be nested inside another tool call. `codemode` excludes it
+from its reachable tools and `batch` rejects it, because both wrap subcalls in
+their own foreground budget: backgrounding the wrapper would orphan the dialog.
+
 ## TUI keys
 
 | Key | Asking | Review |

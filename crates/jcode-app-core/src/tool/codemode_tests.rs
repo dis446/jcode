@@ -54,6 +54,27 @@ impl Tool for JsonTool {
 
 struct TextTool;
 
+struct QuestionStub;
+
+#[async_trait::async_trait]
+impl Tool for QuestionStub {
+    fn name(&self) -> &str {
+        "ask_user_question"
+    }
+
+    fn description(&self) -> &str {
+        "Interactive question stub"
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn execute(&self, _input: Value, _ctx: ToolContext) -> Result<ToolOutput> {
+        Ok(ToolOutput::new("{\"status\":\"answered\"}"))
+    }
+}
+
 #[async_trait::async_trait]
 impl Tool for TextTool {
     fn name(&self) -> &str {
@@ -173,8 +194,11 @@ async fn script_composes_registry_tools() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn script_cannot_call_itself_or_batch() {
+async fn script_cannot_call_itself_batch_or_interactive_questions() {
     let registry = registry().await;
+    registry
+        .register("ask_user_question".into(), Arc::new(QuestionStub))
+        .await;
     let out = registry
         .execute(
             "codemode",
@@ -185,6 +209,11 @@ async fn script_cannot_call_itself_or_batch() {
         .expect("codemode runs");
     assert!(out.output.contains("lookup"), "{}", out.output);
     assert!(!out.output.contains("\"codemode\""), "{}", out.output);
+    assert!(
+        !out.output.contains("ask_user_question"),
+        "a question owns the turn and cannot run inside a script: {}",
+        out.output
+    );
 
     let err = registry
         .execute(
@@ -198,6 +227,19 @@ async fn script_cannot_call_itself_or_batch() {
         Err(err) => err.to_string(),
     };
     assert!(text.contains("unknown tool 'codemode'"), "{text}");
+
+    let err = registry
+        .execute(
+            "codemode",
+            json!({ "code": "return await tools.ask_user_question({ intent: 'x', questions: [] });" }),
+            ctx("codemode-exclusion-test"),
+        )
+        .await;
+    let text = match err {
+        Ok(out) => out.output,
+        Err(err) => err.to_string(),
+    };
+    assert!(text.contains("unknown tool 'ask_user_question'"), "{text}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
