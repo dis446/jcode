@@ -46,8 +46,12 @@ impl App {
         if self.is_remote && working_dir.is_none() {
             return std::sync::Arc::new(Vec::new());
         }
+        // An empty result is deliberately not cached: a repository whose first
+        // `.jcode/commands.json` appears while the session is open is picked up
+        // on the next use instead of demanding a client restart.
         if let Some(cache) = self.project_commands_cache.borrow().as_ref()
             && cache.working_dir == working_dir
+            && !cache.commands.is_empty()
         {
             return std::sync::Arc::clone(&cache.commands);
         }
