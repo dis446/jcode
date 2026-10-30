@@ -330,3 +330,105 @@ async fn reload_marker_is_active_when_clients_are_notified() -> Result<()> {
     abort_server_and_cleanup(&server_handle, &socket_path, &debug_socket_path);
     result
 }
+
+/// A question now stays in the foreground until it is answered. That means a
+/// reload can arrive while the turn is blocked inside the tool, not only while
+/// a provider stream is flowing. The shutdown branch must still abort the tool
+/// and reach a terminal client state instead of hanging until `timeout_secs`.
+#[tokio::test]
+async fn reload_interrupts_pending_question_without_hanging() -> Result<()> {
+    let _env = setup_test_env()?;
+
+    let provider = MockProvider::new();
+    let tool_input = serde_json::json!({
+        "intent": "Choose the path",
+        "questions": [{
+            "id": "task",
+            "question": "Which task?",
+            "options": [{"value": "bug", "label": "Bug fix"}]
+        }]
+    })
+    .to_string();
+    provider.queue_response(vec![
+        StreamEvent::ToolUseStart {
+            id: "call-question".to_string(),
+            name: "ask_user_question".to_string(),
+        },
+        StreamEvent::ToolInputDelta(tool_input),
+        StreamEvent::ToolUseEnd,
+        StreamEvent::MessageEnd {
+            stop_reason: Some("tool_use".to_string()),
+        },
+    ]);
+    let provider: Arc<dyn Provider> = Arc::new(provider);
+    let (socket_path, debug_socket_path, server_handle) =
+        start_inprocess_server("pending-question", provider).await?;
+
+    let result = async {
+        let mut client = server::Client::connect_with_path(socket_path.clone()).await?;
+        let sub = client.subscribe_for_questions().await?;
+        let _ = collect_until_done_unix(&mut client, sub).await?;
+
+        let msg_id = client.send_message("ask me").await?;
+        let mut saw_question = false;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(500), client.read_event()).await {
+                Ok(Ok(ServerEvent::UserQuestionRequest { .. })) => {
+                    saw_question = true;
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                Ok(Err(error)) => anyhow::bail!("client dropped before the question: {error}"),
+                Err(_) => continue,
+            }
+        }
+        anyhow::ensure!(saw_question, "question request never reached the client");
+
+        // Sit past the 3 s foreground budget without answering: the turn must
+        // still be inside the tool, so the reload below interrupts a pending
+        // question rather than an already-backgrounded one.
+        let hold_until = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < hold_until {
+            match tokio::time::timeout(Duration::from_millis(200), client.read_event()).await {
+                Ok(Ok(ServerEvent::ToolDone { id, output, .. })) if id == "call-question" => {
+                    anyhow::bail!("question tool finished before the reload: {output}");
+                }
+                Ok(Ok(_)) | Ok(Err(_)) => {}
+                Err(_) => {}
+            }
+        }
+        client.reload().await?;
+
+        let mut terminal = false;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(500), client.read_event()).await {
+                Ok(Ok(ServerEvent::Reloading { .. })) => {
+                    terminal = true;
+                    break;
+                }
+                Ok(Ok(ServerEvent::Done { id })) if id == msg_id => {
+                    terminal = true;
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                Ok(Err(_)) => {
+                    terminal = true;
+                    break;
+                }
+                Err(_) => continue,
+            }
+        }
+        anyhow::ensure!(
+            terminal,
+            "a pending question interrupted by reload must reach a terminal state without hanging"
+        );
+        Ok(())
+    }
+    .await;
+
+    server::clear_reload_marker();
+    abort_server_and_cleanup(&server_handle, &socket_path, &debug_socket_path);
+    result
+}

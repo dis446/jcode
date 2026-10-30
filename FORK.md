@@ -264,8 +264,10 @@ reveals the queued one), `cargo test -p jcode-app-core --lib -- tool::batch`
 and `tool::codemode` (a nested question is rejected; both tests red without the
 guard), `cargo test --test e2e
 ask_user_question_round_trip_through_server` (holds the question 4 s and fails
-if a `ToolDone` arrives first; red on stock, green here), plus
-`cargo test -p jcode-app-core ask_user_question` and
+if a `ToolDone` arrives first; red on stock, green here),
+`reload_interrupts_pending_question_without_hanging` (same red/green, then a
+reload while the tool is still waiting must reach a terminal client state),
+plus `cargo test -p jcode-app-core ask_user_question` and
 `e2e/run.py --binary <bin> --suite all`. Runtime: ask the model a question in
 the TUI; the dialog stays up past 3 s, the model waits, and the answer returns.
 C16 conflict hints: `blocks_on_user_input` sits above `auto_background_allowed`
