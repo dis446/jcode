@@ -87,7 +87,10 @@ Provider-side prompt caching lets repeated prompt prefixes reuse work from earli
 
 Cache reuse depends on the provider and the request. Monitoring makes misses visible rather than guaranteeing that every request will hit the cache.
 
-See the [KV cache monitor](../crates/jcode-base/src/kv_cache_monitor.rs).
+See [KV cache watcher](KV_CACHE_WATCHER.md) for the counters and ratios, the
+classification order and noise floors, the TUI and log surfaces, retention
+policy and diagnostics. The monitor implementation is
+[kv_cache_monitor.rs](../crates/jcode-base/src/kv_cache_monitor.rs).
 
 ## Todo planning hierarchy
 
