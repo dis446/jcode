@@ -62,6 +62,7 @@ install entry point.
 | C13 | KV cache watcher doc | merged in `master` (docs only) | upstream `master` (3d16d77db, 0.99.1) | `docs/README.md` (entry-point link), `docs/HARNESS.md` (KV section links the new doc), `docs/INFO_WIDGET.md` (removes the KV cache panel from the catalog and merge list, records that the renderer is not placed). New: `docs/KV_CACHE_WATCHER.md`. Documents the counters and hit/yield ratios, the request fingerprints and baseline lifecycle, reusable-boundary accounting, provider noise floors, the full classification order, `[prefix unchanged]`, documented invalidations, daemon/client reconciliation, retention policy, `/cache stats`, transcript notices, status-line warnings, configuration, log fields, limits, and the code map. No runtime behavior changed. | n/a | yes (docs only) |
 | C14 | `/upstream-bump` prompt template | merged in `master` (operator prompt) | upstream `master` (3d16d77db, 0.99.1) | `.gitignore` (unignore `/.jcode/prompts/` so repo-owned templates are trackable). New: `.jcode/prompts/upstream-bump.md`. Read-only workflow: establish the pinned/target state, summarize upstream changes touching every ledger row, state the gains, risk-rate each row and call site, then give a GO/NO-GO/DEFER verdict with an ordered rebase and verification plan. It follows the `FORK.md` upgrade runbook and never runs `jcode update`. Rule 7 keeps operator prompts in dotfiles; this one is fork-workflow-specific and was requested in-repo. No runtime behavior changed. | n/a | yes (operator config, no code) |
 | C15 | Prompt templates appear without a restart | merged in `master` | upstream `master` (3d16d77db, 0.99.1) | `jcode-base`: `prompt_template.rs` (`load_for_working_dir` now walks `source_dirs`; new `source_dirs` and `source_stamp`, with a unit test for add/edit/remove). `jcode-tui`: `app.rs` (`PromptTemplateCache` and `CommandCandidatesCache` gain a stamp), `app/state_ui_runtime.rs` (`prompt_templates` reloads when the source stamp changes), `app/state_ui_input_helpers.rs` (`command_candidates` compares the same stamp before serving its cache), `app/tests/prompt_templates.rs` (new-file test warming both caches first). `docs/PROMPT_TEMPLATES.md` freshness wording. Before this, completion and `/help` cached the template list for the working dir, so a file added mid-session was only usable by typing its exact name (invocation reloaded) and never appeared as a slash command until a directory change. Fingerprint is dir path plus each `.md` file's path, length and mtime; 4 dir stats on a cache lookup. | n/a | yes (small additive freshness check) |
+| C16 | `ask_user_question` stays in the foreground | merged in `master` | upstream `master` (3d16d77db, builds as 0.99.469-dev) | `jcode-app-core`: `agent/tool_handoff.rs` (`blocks_on_user_input`, early return in `auto_background_allowed`), `agent/turn_streaming_mpsc_handoff_tests.rs` (2 tests). `docs/ASK_USER_QUESTION.md` (foreground-only note). The 3 s foreground budget used to adopt every slow tool into the background; for a question that ended the tool call from the model's view while the TUI dialog still owned the client, so the TUI dismissed the dialog on `ToolDone` and the model continued without an answer. Questions now keep the turn in the foreground until answered, cancelled, or `timeout_secs` elapses. | [doc](docs/ASK_USER_QUESTION.md) | yes (one predicate branch) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
@@ -249,6 +250,22 @@ same reason. `TuiState` gains `prompt_template_entries` next to
 before `resolve_acp_skill_invocation` and are advertised by
 `acp_prompt_template_commands`, filtered against the `ACP_BUILTIN_COMMAND_NAMES`
 const and same-named skills.
+C16 best-way check: `ask_user_question` is fork code (C5); its blocking
+semantics are decided by the upstream foreground-budget policy in
+`auto_background_allowed`, which no config or skill can change for one tool.
+Chosen layer: one predicate in the existing policy, no new mechanism.
+C16 verify: `cargo test -p jcode-app-core --lib handoff_tests` (the new
+`interactive_question_waits_in_the_foreground` passes; the pre-existing
+`nonstreaming_background_wait_returns_original_result_after_budget` is red on
+stock too, a paused-clock offset unrelated to this change), plus
+`cargo test -p jcode-app-core ask_user_question`, and
+`e2e/run.py --binary <bin> --suite all`. Runtime: ask the model a question in
+the TUI; the dialog stays up past 3 s, the model waits, and the answer returns.
+C16 conflict hints: `blocks_on_user_input` sits above `auto_background_allowed`
+in `agent/tool_handoff.rs`; both the streaming turn (`turn_streaming_mpsc.rs`)
+and the blocking/SDK paths (`turn_loops.rs`, `execute_with_background`) go
+through that predicate, so a new tool-registry entry point that forks the
+policy must call it too.
 Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
 extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
 `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.

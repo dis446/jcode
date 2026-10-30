@@ -8,9 +8,18 @@ pub(super) fn automatic_handoff_reason(budget: Duration) -> String {
     format!("automatically after {} seconds", budget.as_secs_f64())
 }
 
+/// Tools that block on a human answer must stay in the foreground. Handing
+/// them to background ends the tool call from the model's point of view, so
+/// the model keeps working without the answer while the client dialog (and the
+/// still-running tool that owns it) is orphaned.
+pub(super) fn blocks_on_user_input(name: &str) -> bool {
+    name == "ask_user_question"
+}
+
 pub(super) fn auto_background_allowed(name: &str, input: &serde_json::Value) -> bool {
     // Human decisions belong to the live turn that owns the response channel.
     name != "ask_user"
+        && !blocks_on_user_input(name)
         && !(name == "bg" && input.get("action").and_then(|value| value.as_str()) == Some("wait"))
 }
 
