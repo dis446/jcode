@@ -157,10 +157,11 @@ starts a model turn; a project tool needs the model to choose it and is absent
 from a frozen tool list; operator config cannot add a native slash name. Chosen
 layer: minimal additive fork code, two new app-core modules plus thin hooks on
 the existing `Request::InputShell` path and the slash registry.
-C8 verify: `cargo test -p jcode-app-core --lib command::project` (13 loader
-tests), `cargo test -p jcode-app-core --lib input_shell` (8: shell timeout,
-cancel, cwd, stderr/exit, and Ctrl-C on a cancelled turn reaching a running
-shell), `cargo test -p jcode-protocol --lib input_shell`, and
+C8 verify: `cargo test -p jcode-app-core --lib command::project` (14 loader
+tests), `cargo test -p jcode-app-core --lib input_shell` (9: shell timeout,
+cancel, cwd, stderr/exit, clamped wire deadline, and Ctrl-C on a cancelled
+turn reaching a running shell), `cargo test -p jcode-protocol --lib
+input_shell`, and
 `cargo test -p jcode-tui --lib -- project_command confirm_requires
 initial_message_prefills built_in_command_wins resolver_builds`, and
 `e2e/run.py --binary <fork bin> --suite all` (30/30, including the
