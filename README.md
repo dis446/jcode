@@ -105,4 +105,15 @@ renders as the usual shell card, `confirm: true` gates destructive entries, and
 Ctrl-C or the configured timeout kills the child. See
 [docs/PROJECT_COMMANDS.md](docs/PROJECT_COMMANDS.md).
 
+### Prompt templates (`.md` in a prompts directory)
+
+A markdown file becomes a `/name` command whose body is sent as an ordinary
+user message, with `$1` / `$@` / `${1:-default}` substituted from what you
+typed. Loaded from `$JCODE_HOME/prompts/`, `~/.agents/prompts/`, and the
+project's `.jcode/prompts/` and `.agents/prompts/`; the same format as pi, so
+an existing pi template works unchanged. Unlike a skill the text is the user
+message rather than a standing system reminder, and unlike a project command it
+starts a normal turn. See
+[docs/PROMPT_TEMPLATES.md](docs/PROMPT_TEMPLATES.md).
+
 Everything else in this repository is upstream code.
