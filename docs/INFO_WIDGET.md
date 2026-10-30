@@ -49,7 +49,6 @@ the client already has.
 | `WorkspaceMap` | right | 1 | 1 | Niri-style workspace/session map |
 | `Overview` | right | 2 | 8 | Joined detail sections (below) |
 | `UsageLimits` | left | 5 | 3 | Subscription quota bars |
-| `KvCache` | left | 6 | 3 | Prompt-cache hit ratio and misses |
 | `MemoryActivity` | right | 7 | 3 | Memory graph/activity summary |
 | `ModelInfo` | left | 8 | 1 | Service tier, route, transport, throughput, session |
 | `Compaction` | left | 9 | 3 | Conversation compaction status |
@@ -63,6 +62,10 @@ the client already has.
 
 Priority is a *sort key*, not a reservation: a lower-priority widget appears only
 when its own rectangle still fits after higher-priority ones are placed.
+
+`WidgetKind::KvCache` still exists in the code, but it is not placed in the
+layout and is not merged into `Overview`. The prompt-cache report lives in
+`/cache stats` and the transcript notices. See `KV_CACHE_WATCHER.md`.
 
 Two kinds are permanently disabled by `InfoWidgetData::widget_disabled`:
 `AmbientMode` and `Tips`. `SwarmStatus` reports no data on purpose — managed
@@ -80,7 +83,7 @@ line already shows.
 `Overview` is the join mode. When at least two of its detail sections have data,
 it absorbs compatible widgets instead of letting them dock separately
 (`is_overview_mergeable`): swarm, background tasks, compaction, model info, usage
-limits, KV cache, git changes. Memory deliberately stays out, because the memory
+limits, git changes. Memory deliberately stays out, because the memory
 renderer wants its own box and graph.
 
 A single section does not trigger the overview — one section docks as its own
@@ -136,8 +139,9 @@ for the widget.
 - Git: `git_info` / `dual_git_info` snapshots (local and, over SSH, remote), plus
   paths the agent edited this session (`agent_edited`) to mark agent changes.
 - Commits: recent branch history, hidden once the newest commit is older than 24 h.
-- KV cache: cache-read ratio and miss attributions when the provider reports
-  cache telemetry.
+- KV cache: the renderer in `info_widget_cache.rs` consumes cache-read ratios and
+  miss attributions, but the panel is not currently placed. `/cache stats` is the
+  supported report.
 - Compaction: mode, message counts, summary size, in-progress flag.
 - Cloud: machine telemetry, present only for native SSH attachments.
 - Diagrams: Mermaid blocks when `features.mermaid` is on.
@@ -175,7 +179,7 @@ blinking away while a probe is in flight (`info_widget_cache.rs`,
 | `info_widget_overview.rs` | Page layout (compact vs expanded memory), overview height |
 | `info_widget_settle.rs` | Per-line free-width settlement tracking |
 | `info_widget_stability.rs` | Movement/flicker metrics and scroll simulation |
-| `info_widget_cache.rs`, `info_widget_settle.rs` | Last-good values and flicker control |
+| `info_widget_cache.rs`, `info_widget_settle.rs` | Last-good values and flicker control. The KV cache renderer here is test-covered but not placed |
 | `info_widget_overview.rs`, `_usage`, `_memory_render`, `_model`, `_git`, `_commits`, `_graph`, `_cloud`, `_swarm_gallery`, `_swarm_background`, `_tips`, `_text`, `_frame` | Per-widget renderers |
 | `crates/jcode-tui/src/tui/app/tui_state.rs` (`info_widget_data`) | Builds the snapshot from session state |
 | `crates/jcode-tui/src/tui/ui.rs` | Calls the pass after the transcript and before late overlays |
@@ -188,5 +192,7 @@ blinking away while a probe is in flight (`info_widget_cache.rs`,
 - `docs/AMBIENT_MODE.md` — ambient widget content (kind currently disabled).
 - `docs/MEMORY_ARCHITECTURE.md`, `docs/MEMORY_BUDGET.md` — memory data behind the
   memory widget.
+- `docs/KV_CACHE_WATCHER.md` — prompt-cache telemetry behind `/cache stats` and
+  the transcript notices.
 - `docs/TODO_TASK_LIST.md` — todo stages, which render in the transcript and
   status line, not in a margin widget.
