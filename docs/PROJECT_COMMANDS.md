@@ -49,7 +49,7 @@ name.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `name` | yes | Command name after the slash. `[A-Za-z0-9_-]`, max 64. |
-| `description` | yes | One line shown in `/help` and used as the completion label. Control characters are rejected, so a repo cannot inject terminal escapes. |
+| `description` | yes | One line shown in `/help`; completion labels the command generically. Control characters are rejected, so a repo cannot inject terminal escapes. |
 | `command` | yes | Shell prefix run with `bash -c`. May itself be a shell line. |
 | `cwd` | no | `project`: the root that owns the config file (its real path, so a symlinked `.jcode/commands.json` runs the owner's scripts). `session`: the session working dir. Default: `session` for the global file, `project` for the repo file. |
 | `timeout_secs` | no | Kill the command after this many seconds. Default 120, clamped to 1..3600. |
