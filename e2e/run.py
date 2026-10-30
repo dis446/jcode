@@ -23,6 +23,7 @@ SUITES = {
     "baseline": "suite_baseline",
     "at_file": "suite_at_file",
     "project_commands": "suite_project_commands",
+    "prompt_templates": "suite_prompt_templates",
 }
 
 
