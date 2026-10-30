@@ -7,7 +7,14 @@ ios_simulator_screenshot.png
 # Local onboarding sandbox + auth fixtures. May contain REAL OAuth tokens copied
 # from $HOME (see scripts/onboarding_sandbox.sh seed-real-logins). Never commit.
 /.tmp/
-/.jcode/generated-images/
+# jcode writes per-session runtime state into a checkout's .jcode (logs,
+# active pids, telemetry, generated images). Everything there is machine-local
+# except repo-owned content, which stays explicitly trackable below.
+/.jcode/*
+!/.jcode/skills/
+!/.jcode/tools.json
+!/.jcode/commands.json
+!/.jcode/semantic-todo-migration-spec.md
 /telemetry-worker/backups/
 target-ttest/
 target-ttest*/
