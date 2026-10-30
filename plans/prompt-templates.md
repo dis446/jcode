@@ -1,6 +1,6 @@
 # Feature request: markdown prompt templates as slash commands
 
-Status: implementing (fork C9)
+Status: merged (fork C9, 0.99.414-dev)
 Owner: jcode fork
 Related: `plans/native-project-slash-commands.md` (C8, shell commands),
 `docs/SYSTEM_PROMPT_CONFIG.md` (prompt layers), skills (`SKILL.md`)

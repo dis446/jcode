@@ -55,6 +55,7 @@ install entry point.
 | C6 | Kitty graphics inside Herdr panes | merged in `master`, installed (d39541113, 0.99.382-dev) | upstream `master` (ace3d721b, builds as 0.99.377-dev) | `jcode-tui-mermaid`: `mermaid_runtime.rs` (`fast_path_assumed_protocol`, `herdr_kitty_images_enabled`, hook in `init_picker`), runtime tests. `docs/HERDR.md` compatibility bullet. Herdr rewrites `TERM=xterm-256color`, exports `TERM_PROGRAM=herdr`, and strips `KITTY_WINDOW_ID`, so the fast env path returned `None` and every image-capable surface (Mermaid, LaTeX, read images) fell back to text. Herdr 0.9.5 renders Kitty graphics for child apps (`terminal.kitty_graphics`, on by default), so the fork now assumes Kitty when the env probe misses inside Herdr, leaving env-detected protocols and probe answers untouched; `JCODE_HERDR_KITTY_IMAGES=0` restores the old fallback, and tmux/screen nested inside a pane (`TERM=tmux-*`/`screen*`) still falls back to text. | n/a | yes (small additive detection rule + env opt-out, mirrors `JCODE_ZELLIJ_KITTY_IMAGES`) |
 | C7 | End-to-end todo task list doc | merged in `master` (docs only) | upstream `master` (b61e58b32) | `docs/README.md` (entry-point link). New: `docs/TODO_TASK_LIST.md`. Documents the existing tool schema, persisted todo state, TUI surfaces, turn-end poke and quality-gate order, pause conditions, budgets, configuration, and the headless/SDK entry points. No runtime behavior changed. | n/a | yes (docs only) |
 | C8 | Project-defined slash commands (`.jcode/commands.json`) | merged in `master`, installed | upstream `master` (b61e58b32, builds as 0.99.414-dev) | `jcode-protocol`: `wire.rs` (`InputShell` gains optional `cwd` and `timeout_secs`), `protocol_tests/misc_events.rs`. `jcode-app-core`: `lib.rs` (2 module declarations), `server/client_actions.rs` (`handle_input_shell` + `run_input_shell`, timeout/cancel), `server/client_lifecycle.rs` (request fields + shell cancel hook), `tool/project.rs` (shared config readers), `protocol_tests/misc_events.rs`. `jcode-tui`: `app.rs` (module + 2 fields + candidate cache key), `app/tui_lifecycle.rs` (2 inits, `prefill_input`), `app/state_ui_runtime.rs` (registry + `known_command_names`), `app/state_ui_input_helpers.rs` (completion), `app/commands_dispatch.rs` (names + local hook), `app/remote/key_handling.rs` + `app/remote/input_dispatch.rs` (remote hook, `run_remote_shell`), `app/remote.rs` (re-export), `app/input.rs` (`run_local_project_shell`), `app/input/shell_commands.rs` (local timeout), `app/tui_state.rs` + `tui/mod.rs` + `tui/ui_tests/mod.rs` (`project_command_entries`), `tui/ui_overlays.rs` (help section), `tui/backend.rs` (`send_input_shell_with`). Root: `src/cli/args.rs`, `dispatch.rs`, `ssh.rs`, `selfdev.rs`, `tui_launch.rs`. New: `project_config.rs`, `input_shell_registry.rs`, `command/{mod.rs,project.rs}`, `app/commands_project.rs`, `app/tests/project_commands.rs`, `docs/PROJECT_COMMANDS.md` | [plan](plans/native-project-slash-commands.md) | yes (new modules + thin hooks) |
+| C9 | Markdown prompt templates as slash commands | merged in `master`, installed (0.99.414-dev) | upstream `master` (cedbffc9f, builds as 0.99.414-dev) | `jcode-base`: `lib.rs` (`pub mod prompt_template`). New: `prompt_template.rs` (four source roots, frontmatter with 60-char body fallback, name/size/limit validation, pi argv splitter, one-pass substitution). `jcode-tui`: `app.rs` (`mod commands_prompt` + `PromptTemplateCache` + field), `app/tui_lifecycle.rs` (2 inits), `app/state_ui_runtime.rs` (`prompt_templates` cache keyed on working dir, `reload_prompt_templates`, shadow filtering, `known_command_names`), `app/state_ui_input_helpers.rs` (completion), `app/input.rs` (expand after the `!cmd` branch, before skill resolution), `app/remote/input_dispatch.rs` (`submit_remote_template_prompt`, expansion in `submit_remote_slash_input`), `app/tui_state.rs` + `tui/mod.rs` + `tui/ui_tests/mod.rs` (`prompt_template_entries`), `tui/ui_overlays.rs` (/help section). New: `app/commands_prompt.rs`, `app/tests/prompt_templates.rs`. Root: `src/cli/acp.rs` (`acp_prompt_template_commands`, expansion in `run_prompt`), `src/cli/acp/tests.rs`. `e2e/run.py` + new `e2e/suite_prompt_templates.py`. New: `docs/PROMPT_TEMPLATES.md`. | [plan](plans/prompt-templates.md), [doc](docs/PROMPT_TEMPLATES.md) | yes (new module + thin hooks) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
@@ -181,30 +182,6 @@ last `||` arm of `dispatch_single_local_command` and the top of
 wire change is additive (`#[serde(default)]` on both new `InputShell` fields), so
 an older peer still decodes the request. `InputShell` has one other call site:
 `RemoteConnection::send_input_shell_with`.
-C9 best-way check: upstream has no prompt-template concept. A skill injects a
-standing system reminder and cannot substitute arguments into a user message;
-a project command runs a shell line and starts no turn; prompt-overlay.md is
-session-wide. Chosen layer: minimal additive fork code, one loader module plus
-thin hooks on the existing slash dispatch, completion, help and ACP paths.
-C9 verify: `cargo test -p jcode-base --lib prompt_template` (13 loader, argv and
-substitution tests), `cargo test -p jcode-tui --lib -- template_ built_in_and_project
-unknown_slash_text`, `cargo test -p jcode --lib acp` (skill/template command
-advertisement), and `e2e/run.py --binary <fork bin> --suite all` (including the
-`prompt_templates` suite that fails on stock by design). Runtime: a template in
-`~/.agents/prompts` or the repo's `.jcode/prompts` completes as `/name`, expands
-with `$1`/`$@`/`${1:-default}`, shows under /help "Prompt templates", and a file
-added mid-session needs no restart. Substitution is pi's exact table (checked
-against `dist/core/prompt-templates.js` in the installed package): missing
-positions become empty, `${@:N}`/`${@:N:L}` are supported, and there is no `\$`
-escape.
-C9 conflict hints: the TUI cache mirrors `project_commands_cache` in
-`app/state_ui_runtime.rs`; expansion hooks sit immediately before skill
-resolution in `app/input.rs::submit_input` and at the top of
-`app/remote/input_dispatch.rs::submit_remote_slash_input`. `TuiState` gains
-`prompt_template_entries` next to `project_command_entries` (2 impls). ACP
-templates resolve in `run_prompt` before `resolve_acp_skill_invocation` and are
-advertised by `acp_prompt_template_commands`, filtered against the
-`ACP_BUILTIN_COMMAND_NAMES` const and same-named skills.
 C5 best-way check: no upstream question tool exists, no config, skill, or MCP
 path can render a native structured dialog, and the blocking tool-to-client
 interactive-input primitive already exists. Chosen layer: minimal additive fork
@@ -221,6 +198,33 @@ the forwarder match sits in the existing `stdin_req_rx` loop; the TUI hooks sit
 beside the session-picker hooks in the two key paths, `draw_inner`, and the two
 App constructors. Protocol test struct literals are the first compile failure
 when upstream adds a `Subscribe` field.
+C9 best-way check: upstream has no prompt-template concept. A skill injects a
+standing system reminder and cannot substitute arguments into a user message;
+a project command runs a shell line and starts no turn; prompt-overlay.md is
+session-wide. Chosen layer: minimal additive fork code, one loader module plus
+thin hooks on the existing slash dispatch, completion, help and ACP paths.
+C9 verify: `cargo test -p jcode-base --lib prompt_template` (13 loader, argv and
+substitution tests), `cargo test -p jcode-tui --lib -- template_ built_in_and_project
+unknown_slash_text` (13), `cargo test -p jcode --lib acp` (25, including
+template advertisement), and `e2e/run.py --binary <fork bin> --suite all`
+(37/37, including the 7 `prompt_templates` scenarios that fail on stock by
+design). Runtime: a template in `~/.agents/prompts` or the repo's
+`.jcode/prompts` completes as `/name`, expands with `$1`/`$@`/`${1:-default}`,
+shows under /help "Prompt templates", and a file added mid-session needs no
+restart. Substitution is pi's exact table (checked against
+`dist/core/prompt-templates.js` in the installed package): missing positions
+become empty, `${@:N}`/`${@:N:L}` are supported, and there is no `\$` escape.
+C9 conflict hints: the TUI cache mirrors `project_commands_cache` in
+`app/state_ui_runtime.rs`; expansion hooks sit immediately before skill
+resolution in `app/input.rs::submit_input` and at the top of
+`app/remote/input_dispatch.rs::submit_remote_slash_input`. The local `!cmd`
+branch above the expansion hook is what keeps a bang-leading body from running
+as a shell line; the remote path uses `submit_remote_template_prompt` for the
+same reason. `TuiState` gains `prompt_template_entries` next to
+`project_command_entries` (2 impls). ACP templates resolve in `run_prompt`
+before `resolve_acp_skill_invocation` and are advertised by
+`acp_prompt_template_commands`, filtered against the `ACP_BUILTIN_COMMAND_NAMES`
+const and same-named skills.
 Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
 extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
 `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.
