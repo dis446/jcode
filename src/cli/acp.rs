@@ -11,6 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
+/// Slash commands the ACP layer handles itself, so a skill or template with the
+/// same name is not advertised.
+const ACP_BUILTIN_COMMAND_NAMES: [&str; 3] = ["model", "models", "effort"];
+
 const ACP_PROTOCOL_VERSION: u64 = 1;
 
 const JSONRPC_PARSE_ERROR: i64 = -32700;
@@ -783,13 +787,25 @@ impl AcpRuntime {
     }
 
     async fn write_available_commands(&self, session_id: &str) -> Result<()> {
-        let skills = {
+        let (skills, working_dir) = {
             let sessions = self.sessions.lock().await;
-            sessions.get(session_id).map(|session| session.skills())
-        }
-        .unwrap_or_default();
+            sessions
+                .get(session_id)
+                .map(|session| (session.skills(), session.working_dir.clone()))
+                .unwrap_or_default()
+        };
+        let templates = crate::prompt_template::PromptTemplateRegistry::load_for_working_dir(
+            working_dir.as_deref(),
+        );
+        // A template shadows a same-named skill, so do not advertise both.
+        let template_names: std::collections::HashSet<&str> = templates
+            .list()
+            .into_iter()
+            .map(|template| template.name())
+            .collect();
         let mut commands = acp_available_commands();
-        commands.extend(acp_skill_commands(&skills));
+        commands.extend(acp_skill_commands(&skills, &template_names));
+        commands.extend(acp_prompt_template_commands(&templates));
         self.write_notification(
             "session/update",
             json!({
@@ -1017,9 +1033,22 @@ impl AcpRuntime {
         // against the session's registry. Unknown or path-like slash text is
         // passed through to the model unchanged.
         let mut text = text;
+        // Prompt templates expand into ordinary prompt text before skill
+        // resolution, so a template shadows a same-named skill (the TUI order).
+        let templates = crate::prompt_template::PromptTemplateRegistry::load_for_working_dir(
+            session.working_dir.as_deref(),
+        );
+        let mut expanded_template = false;
+        if explicit_skill.is_none()
+            && let Some((_name, expanded)) = templates.expand_invocation(&text)
+        {
+            text = expanded;
+            expanded_template = true;
+        }
         let skills = session.skills();
         let selected_skill = match explicit_skill {
             Some(name) => Some(name),
+            None if expanded_template => None,
             None => match resolve_acp_skill_invocation(&skills, &text) {
                 Some((name, prompt)) => {
                     text = prompt.unwrap_or_default();
@@ -1771,23 +1800,51 @@ fn resolve_acp_skill_invocation(
 }
 
 /// ACP `availableCommands` entries for installed skills. Skills whose names
-/// contain whitespace or shadow built-in commands are not advertised (they can
-/// still be invoked by typing the slash command).
-fn acp_skill_commands(skills: &crate::skill::SkillRegistry) -> Vec<Value> {
-    const BUILTIN: [&str; 3] = ["model", "models", "effort"];
+/// contain whitespace, shadow built-in commands, or are shadowed by a prompt
+/// template are not advertised (they can still be invoked by typing the slash
+/// command).
+fn acp_skill_commands(
+    skills: &crate::skill::SkillRegistry,
+    template_names: &std::collections::HashSet<&str>,
+) -> Vec<Value> {
     skills
         .list()
         .into_iter()
         .filter(|skill| {
             !skill.name.is_empty()
                 && !skill.name.contains(char::is_whitespace)
-                && !BUILTIN.contains(&skill.name.as_str())
+                && !ACP_BUILTIN_COMMAND_NAMES.contains(&skill.name.as_str())
+                && !template_names.contains(skill.name.as_str())
         })
         .map(|skill| {
             json!({
                 "name": skill.name,
                 "description": skill.description,
                 "input": { "hint": "request for this skill (optional)" },
+            })
+        })
+        .collect()
+}
+
+/// ACP `availableCommands` entries for prompt templates. A template shadows a
+/// same-named skill, matching the TUI precedence.
+fn acp_prompt_template_commands(
+    templates: &crate::prompt_template::PromptTemplateRegistry,
+) -> Vec<Value> {
+    templates
+        .list()
+        .into_iter()
+        .filter(|template| {
+            !template.name().contains(char::is_whitespace)
+                && !ACP_BUILTIN_COMMAND_NAMES.contains(&template.name())
+        })
+        .map(|template| {
+            json!({
+                "name": template.name(),
+                "description": template.description(),
+                "input": {
+                    "hint": template.argument_hint().unwrap_or("arguments (optional)"),
+                },
             })
         })
         .collect()

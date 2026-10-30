@@ -266,13 +266,41 @@ fn explicit_skill_metadata_is_read_from_prompt_meta() {
 #[test]
 fn skill_commands_advertise_installed_skills_without_shadowing_builtins() {
     let (_dir, skills) = project_skills(&["interrogate", "model"]);
-    let commands = acp_skill_commands(&skills);
+    let commands = acp_skill_commands(&skills, &std::collections::HashSet::new());
     let names: Vec<&str> = commands
         .iter()
         .map(|command| command["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, ["interrogate"]);
     assert_eq!(commands[0]["description"], "Test interrogate");
+
+    // A prompt template of the same name shadows the skill in the picker, just
+    // like it does at submit time.
+    let shadowed = std::collections::HashSet::from(["interrogate"]);
+    assert!(acp_skill_commands(&skills, &shadowed).is_empty());
+}
+
+#[test]
+fn prompt_template_commands_advertise_templates_without_shadowing_builtins() {
+    let dir = tempfile::tempdir().unwrap();
+    let prompts = dir.path().join(".jcode").join("prompts");
+    std::fs::create_dir_all(&prompts).unwrap();
+    std::fs::write(
+        prompts.join("review.md"),
+        "---\ndescription: Review staged changes\nargument-hint: \"[focus]\"\n---\nReview.",
+    )
+    .unwrap();
+    std::fs::write(prompts.join("model.md"), "Shadowed by the built-in.").unwrap();
+    let templates = crate::prompt_template::PromptTemplateRegistry::load_from_roots(
+        Some(dir.path()),
+        None,
+        None,
+    );
+    let commands = acp_prompt_template_commands(&templates);
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(commands[0]["name"], "review");
+    assert_eq!(commands[0]["description"], "Review staged changes");
+    assert_eq!(commands[0]["input"]["hint"], "[focus]");
 }
 
 #[test]
