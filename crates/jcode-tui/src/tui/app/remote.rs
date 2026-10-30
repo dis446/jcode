@@ -1,10 +1,11 @@
 #![cfg_attr(test, allow(clippy::items_after_test_module))]
 
 use super::{
-    App, DisplayMessage, MAX_TURN_HOLD_SECS, PendingNewSessionRename, PendingReloadReconnectStatus,
-    ProcessingStatus, RemoteResumeActivity, SendAction, auth::auth_muse_helpers,
+    App, DisplayMessage, MAX_TURN_HOLD_SECS, PendingReloadReconnectStatus, ProcessingStatus,
+    PendingNewSessionRename, RemoteResumeActivity, SendAction, auth::auth_muse_helpers,
     ctrl_bracket_fallback_to_esc, input, parse_rate_limit_error,
-    remote_notifications::present_swarm_notification, spawn_in_new_terminal,
+    remote_notifications::present_swarm_notification,
+    spawn_in_new_terminal,
 };
 use crate::bus::BusEvent;
 use crate::message::ToolCall;

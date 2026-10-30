@@ -183,7 +183,10 @@ pub(in crate::tui::app) async fn submit_remote_slash_input(
 ) -> Result<()> {
     let raw_input = prepared.raw_input.clone();
 
-    if super::super::commands_project::handle_remote(app, remote, prepared.expanded.trim()).await? {
+    let handled =
+        super::super::commands_project::handle_remote(app, remote, prepared.expanded.trim())
+            .await?;
+    if handled {
         return Ok(());
     }
 
