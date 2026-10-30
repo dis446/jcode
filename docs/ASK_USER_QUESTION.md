@@ -111,6 +111,12 @@ The dialog follows the `@juicesharp/rpiv-ask-user-question` layout used by Pi:
   selected choice is readable without a separate detail pane.
 - The review phase uses the same frame with a Review heading and Submit tab.
 
+The call is never handed to the background. The agent's 3-second foreground
+budget applies to ordinary tools, but a question owns the turn until the user
+answers, cancels, or `timeout_secs` elapses. Backgrounding it would end the tool
+call for the model while the dialog still owned the client, so the model would
+continue without the answer and the dialog would be dismissed.
+
 ## TUI keys
 
 | Key | Asking | Review |

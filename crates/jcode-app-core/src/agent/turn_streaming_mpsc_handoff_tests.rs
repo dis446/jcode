@@ -90,6 +90,30 @@ async fn callback_paths_honor_custom_and_disabled_budgets() {
 }
 
 struct WaitProbe;
+struct QuestionProbe;
+
+#[async_trait::async_trait]
+impl crate::tool::Tool for QuestionProbe {
+    fn name(&self) -> &str {
+        "ask_user_question"
+    }
+    fn description(&self) -> &str {
+        "Question probe"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type":"object"})
+    }
+    async fn execute(
+        &self,
+        _: serde_json::Value,
+        _: ToolContext,
+    ) -> Result<crate::tool::ToolOutput> {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        Ok(crate::tool::ToolOutput::new(
+            "{\"status\":\"answered\"}",
+        ))
+    }
+}
 
 #[tokio::test(start_paused = true)]
 async fn ask_user_waits_past_budget_and_returns_its_answer() {
@@ -192,6 +216,9 @@ async fn nonstreaming_background_wait_returns_original_result_after_budget() {
 async fn background_wait_is_not_automatically_backgrounded() {
     let input = serde_json::json!({"action": "wait", "task_id": "task"});
     assert!(!auto_background_allowed("bg", &input));
+    // A question dialog owns the turn until the user answers it. Backgrounding
+    // it ends the tool call early, so the model proceeds without the answer.
+    assert!(!auto_background_allowed("ask_user_question", &input));
     assert!(auto_background_allowed(
         "bg",
         &serde_json::json!({"action": "status"})
@@ -209,6 +236,36 @@ async fn background_wait_is_not_automatically_backgrounded() {
     // Reloads still interrupt a wait safely, without waiting for its deadline.
     shutdown.fire();
     assert!(!wait_for_tool_handoff(&bg, &shutdown, false, Duration::from_secs(3)).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn interactive_question_waits_in_the_foreground() {
+    let registry = Registry::empty();
+    registry
+        .register("ask_user_question".into(), Arc::new(QuestionProbe))
+        .await;
+    let ctx = ToolContext {
+        session_id: "question-foreground-probe".into(),
+        message_id: "message".into(),
+        tool_call_id: "question-probe".into(),
+        working_dir: None,
+        stdin_request_tx: None,
+        graceful_shutdown_signal: None,
+        execution_mode: ToolExecutionMode::Direct,
+    };
+    let start = tokio::time::Instant::now();
+    let result = execute_with_background(
+        registry,
+        "ask_user_question".into(),
+        serde_json::json!({"intent": "probe", "questions": []}),
+        ctx,
+    )
+    .await
+    .unwrap();
+    // The probe sleeps longer than the 3 s foreground budget, so reaching its
+    // own result proves the question was never handed to background.
+    assert!(start.elapsed() >= Duration::from_secs(30));
+    assert_eq!(result.output, "{\"status\":\"answered\"}");
 }
 
 #[tokio::test(start_paused = true)]

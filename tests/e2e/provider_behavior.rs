@@ -1016,7 +1016,7 @@ async fn ask_user_question_round_trip_through_server() -> Result<()> {
         let message_id = client.send_message("ask me").await?;
         let mut saw_question = false;
         let mut final_text = String::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
             let event = timeout(Duration::from_secs(2), client.read_event()).await??;
             match event {
@@ -1032,6 +1032,24 @@ async fn ask_user_question_round_trip_through_server() -> Result<()> {
                     assert_eq!(root, "task");
                     assert_eq!(questions.len(), 2);
                     saw_question = true;
+                    // A question owns the turn until the user answers. Waiting
+                    // past the 3 s foreground budget must not hand it to the
+                    // background: that would end the tool call early and the
+                    // model would continue without the answer.
+                    let hold_until = Instant::now() + Duration::from_secs(4);
+                    while Instant::now() < hold_until {
+                        match timeout(Duration::from_millis(200), client.read_event()).await {
+                            Ok(Ok(ServerEvent::ToolDone { id, output, .. }))
+                                if id == "call-question" =>
+                            {
+                                anyhow::bail!(
+                                    "question tool finished before the answer: {output}"
+                                );
+                            }
+                            Ok(Ok(_)) | Ok(Err(_)) => {}
+                            Err(_) => {}
+                        }
+                    }
                     client
                         .send_user_question_response(
                             &request_id,
