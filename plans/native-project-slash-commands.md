@@ -1,8 +1,14 @@
 # Feature request: native project slash commands (shell, no model turn)
 
-Status: proposed
-Owner: jcode fork (C3)
+Status: implemented (fork C5, branch `feature/native-project-commands`)
+Owner: jcode fork (C5)
 Related: C2 project-defined tools (`docs/PROJECT_TOOLS.md`), qLab `/feature-*` skills
+
+> As built: the command runs on the daemon through the existing
+> `Request::InputShell` path (not client-side, not a new request), and the
+> startup message is an optional composer draft (`--initial-message`) instead of
+> a queued user message. See "As built" below for the deviations and the
+> verification evidence.
 
 ## Problem
 
@@ -45,20 +51,25 @@ Typing a project command in the jcode composer executes it directly.
   code and duration, reusing the existing `!command` presentation.
 - Ctrl-C cancels the running command; a timeout kills it.
 - `feature-start` (via the existing script) creates the herdr workspace, opens
-  the nvim/terminal tabs, spawns the jcode pane, and that pane receives one
-  queued user message only:
+  the nvim/terminal tabs, spawns the jcode pane, and that pane may be prefilled
+  with one draft message only:
 
   ```
   Do not call any tools. Wait for the user's instructions.
   ```
 
-  The message is queued, not sent: the new session makes zero model calls and
-  sits idle until the user types. If queuing is not possible from the CLI, the
-  fallback is one turn with all tools disabled for that turn and the same text.
+  `jcode --initial-message` fills the composer without submitting it. The new
+  session makes zero model calls and sits idle until the user types. A fresh
+  jcode pane is already idle, so the flag is optional context, not a required
+  part of the workflow.
 - `/feature-*` keeps working when the invoking session's tool list is frozen or
   the project tools are missing: the command path is independent of both.
 
 ## Proposed design
+
+> Superseded in part by "As built": execution is daemon-side (section 2), not
+> client-side, and the startup message is a draft prefill (section 3), not a
+> queued message.
 
 ### 1. Project command definitions: `.jcode/commands.json`
 
@@ -181,22 +192,35 @@ skill as documentation. Built-in commands should shadow a same-named skill.
 10. A malformed `commands.json` never prevents session startup; invalid entries
     are skipped with a warning.
 
-## Implementation map (fork)
+Acceptance result: 1, 3, 4, 5, 6, 7, 9 and 10 are covered by unit or e2e
+tests. 2 changed shape: the pane is prefilled with an optional draft and makes
+zero calls; the herdr workspace itself is qLab-side and unchanged here. 8
+(SSH refusal) is implemented and covered by inspection, not by an automated
+test, because the refusal needs a live `RemoteConnection`.
 
-- New: `crates/jcode-app-core/src/command/project.rs` (or a `commands` module
-  beside `tool`) with the loader, validation, merge and tests.
-- `crates/jcode-tui/src/tui/app/commands_dispatch.rs`: project command lookup in
-  `dispatch_single_local_command`, names in `registered_command_names`, remote
-  guard.
-- `crates/jcode-tui/src/tui/app/input/shell_commands.rs`: reuse
-  `build_input_shell_command` / `spawn_input_shell_command` with argv support
-  (today it takes one shell string; add a positional-args variant).
-- `src/cli/args.rs`: `--initial-message`.
-- Client startup path: queue the initial message after attach.
-- `crates/jcode-tui/src/tui/app/input.rs` or the command completion source:
-  expose project command names to the composer.
-- qLab: `.jcode/commands.json`, `scripts/feature-workflow/feature-start` and
-  `feature-respawn` spawn line.
+## Implementation map (as built)
+
+- `crates/jcode-app-core/src/project_config.rs`: shared bounded, symlink-aware
+  config reader. `tool/project.rs` uses it too.
+- `crates/jcode-app-core/src/command/project.rs`: `.jcode/commands.json`
+  loader, validation, merge, `confirm`, timeout clamping, shell-line builder.
+- `crates/jcode-app-core/src/input_shell_registry.rs` and
+  `server/client_actions.rs::run_input_shell`: timeout and Ctrl-C kill the
+  child. `server/client_lifecycle.rs` wires `Cancel` to the registry.
+- `crates/jcode-protocol/src/wire.rs`: `InputShell` gains additive
+  `cwd`/`timeout_secs`, so the daemon runs the project's script in place.
+- `crates/jcode-tui/src/tui/app/commands_project.rs`: resolve, confirm, local
+  execution, and remote dispatch.
+- `app/state_ui_runtime.rs` (`project_commands`, `known_command_names`),
+  `app/state_ui_input_helpers.rs` (completion), `app/commands_dispatch.rs` and
+  `app/remote/{key_handling,input_dispatch}.rs` (hooks),
+  `tui/ui_overlays.rs` + `tui/mod.rs`/`app/tui_state.rs` (help section).
+- `src/cli/args.rs` + `tui_launch.rs` + `app/tui_lifecycle.rs`:
+  `--initial-message` prefills the composer.
+- New tests: `app/tests/project_commands.rs` and `e2e/suite_project_commands.py`.
+- qLab itself (`.jcode/commands.json`, `feature-start`/`feature-respawn` spawn
+  line, deleting the six skills) lives outside this repository and is not part
+  of this change.
 
 ## Risks and edge cases
 
@@ -204,17 +228,20 @@ skill as documentation. Built-in commands should shadow a same-named skill.
   no tool call and therefore no `pre_tool` gate. It is equivalent to typing a
   `!command` in a repo you already trust. Nothing executes at load. `confirm`
   exists for destructive entries.
-- **Argument quoting.** Use positional parameters, never string interpolation
-  into the shell line, so spaces and globs survive.
+- **Argument quoting.** The typed tail is appended verbatim, so the shell sees
+  the same words, quotes, globs, and paths. `command` is a prefix, not a full
+  line with `"$@"`.
 - **Working directory.** Project commands run at the config root, which is the
   qLab repo even when the config is symlinked into a feature root. That is what
   the feature scripts expect.
 - **Shadowing.** Built-ins win. Skills and tools with the same name remain, but
   the command path is the one the user typed.
-- **Remote sessions.** v1 is client-local. A user in `/ssh` mode gets a clear
-  refusal instead of running the laptop's qLab against a remote project.
-- **Initial message.** It must not start a turn. If a queue injection is not
-  available on every transport, the fallback must still guarantee no tool call.
+- **Remote sessions.** Execution is daemon-side, so a normal local daemon runs
+  the project's own script. An `/ssh` client refuses: the laptop's project tree
+  is not the remote one.
+- **Initial message.** There is no "persisted but not dispatched" user message
+  in the protocol; `queued_messages` auto-sends. The flag therefore fills the
+  composer, which guarantees zero calls.
 
 ## Non-goals
 
@@ -222,15 +249,15 @@ skill as documentation. Built-in commands should shadow a same-named skill.
   the deterministic user-invoked surface.
 - A general plugin system for slash commands with subcommands or completion
   beyond names and descriptions.
-- Running project commands on the daemon or over SSH in v1.
+- Running project commands over SSH in v1.
 
-## Open questions
+## Resolved decisions
 
-1. Queue the initial message with zero turns (preferred) or send one turn with
-   tools disabled (fallback)? The plan assumes queue-first.
-2. Should `confirm: true` default on for names matching a denied pattern
-   (`stop`, `rm`, `delete`), or stay per-entry only?
-3. One `commands.json` like `tools.json`, or one file per command for easier
-   diffs?
-4. Should project commands be visible in `/help` and command completion, or only
-   in completion?
+1. The initial message is an optional composer draft (`--initial-message`), not
+   a queued message and not a tools-disabled turn.
+2. `confirm` is per-entry only. No name-pattern defaults; the script's own
+   refusals still apply.
+3. One `commands.json`, symmetric with `tools.json`.
+4. Visible in both `/help` and completion.
+5. Execution is daemon-side through `Request::InputShell`; there is no separate
+   protocol request.
