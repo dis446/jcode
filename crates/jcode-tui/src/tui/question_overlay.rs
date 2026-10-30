@@ -16,7 +16,13 @@ use ratatui::{
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::collections::{BTreeSet, HashMap};
+use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
+
+/// A keypad sequence can degrade to a stray Escape. Require a deliberate
+/// second press, and ignore bursts closer than this.
+const ESC_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
+const ESC_BURST_WINDOW: Duration = Duration::from_millis(300);
 
 /// A request waiting for the dialog to become free.
 #[derive(Debug, Clone)]
@@ -67,6 +73,8 @@ pub struct QuestionOverlay {
     custom: String,
     custom_cursor: usize,
     list_state: ListState,
+    cancel_armed: bool,
+    last_esc_at: Option<Instant>,
 }
 
 impl QuestionOverlay {
@@ -97,6 +105,8 @@ impl QuestionOverlay {
             custom: String::new(),
             custom_cursor: 0,
             list_state,
+            cancel_armed: false,
+            last_esc_at: None,
         }
     }
 
@@ -162,13 +172,34 @@ impl QuestionOverlay {
         if self.editing_custom {
             return self.handle_custom_edit_key(code, modifiers, text);
         }
-        if code == KeyCode::Esc
-            || (code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
-        {
+        if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
             return QuestionKeyOutcome::Cancel(UserQuestionResult::Cancelled {
                 reason: Some("user cancelled the questionnaire".into()),
             });
         }
+        if code == KeyCode::Esc {
+            let now = Instant::now();
+            let burst = self
+                .last_esc_at
+                .is_some_and(|at| now.duration_since(at) < ESC_BURST_WINDOW);
+            let expired = self
+                .last_esc_at
+                .is_none_or(|at| now.duration_since(at) >= ESC_CONFIRM_WINDOW);
+            self.last_esc_at = Some(now);
+            if burst {
+                // Keypad sequences often emit Escape twice in one burst. Treat
+                // it as a single stray key instead of cancelling.
+                return QuestionKeyOutcome::Handled;
+            }
+            if self.cancel_armed && !expired {
+                return QuestionKeyOutcome::Cancel(UserQuestionResult::Cancelled {
+                    reason: Some("user cancelled the questionnaire".into()),
+                });
+            }
+            self.cancel_armed = true;
+            return QuestionKeyOutcome::Handled;
+        }
+        self.cancel_armed = false;
 
         match self.phase {
             Phase::Asking => self.handle_asking_key(code, modifiers, text),
@@ -207,7 +238,7 @@ impl QuestionOverlay {
             KeyCode::Char(' ') => {
                 self.toggle_multi();
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::KeypadBegin => {
                 if self.showing_custom_row() {
                     self.begin_custom_edit();
                 } else if let Some(node) = self.node().cloned() {
@@ -249,7 +280,7 @@ impl QuestionOverlay {
             KeyCode::Left | KeyCode::Backspace => {
                 self.go_back();
             }
-            KeyCode::Enter => match self.selected {
+            KeyCode::Enter | KeyCode::KeypadBegin => match self.selected {
                 0 => {
                     return QuestionKeyOutcome::Submit(UserQuestionResult::Answered {
                         answers: self.answers.clone(),
@@ -762,7 +793,9 @@ impl QuestionOverlay {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let hints = if self.editing_custom {
+        let hints = if self.cancel_armed {
+            "esc again to cancel · enter select · ↑/↓ move · ← back"
+        } else if self.editing_custom {
             "enter submit · esc back to list · shift+enter newline"
         } else if self.phase == Phase::Review {
             "enter submit · ↑/↓ move · ← back · esc cancel"
@@ -901,8 +934,20 @@ mod tests {
     }
 
     #[test]
-    fn escape_cancels() {
+    fn escape_needs_a_deliberate_second_press() {
         let mut overlay = QuestionOverlay::new(request());
+        assert!(matches!(
+            overlay.handle_key(KeyCode::Esc, KeyModifiers::NONE, None),
+            QuestionKeyOutcome::Handled
+        ));
+        assert!(overlay.cancel_armed);
+        // A keypad burst (two Escapes back to back) must not cancel.
+        assert!(matches!(
+            overlay.handle_key(KeyCode::Esc, KeyModifiers::NONE, None),
+            QuestionKeyOutcome::Handled
+        ));
+        // A deliberate second press outside the burst window does.
+        overlay.last_esc_at = Some(Instant::now() - Duration::from_millis(500));
         let outcome = overlay.handle_key(KeyCode::Esc, KeyModifiers::NONE, None);
         assert!(matches!(
             outcome,

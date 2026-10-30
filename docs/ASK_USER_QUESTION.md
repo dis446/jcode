@@ -120,11 +120,17 @@ The dialog follows the `@juicesharp/rpiv-ask-user-question` layout used by Pi:
 | Enter | select or confirm | submit on Submit row |
 | Space | toggle multi-select | |
 | Left / Backspace | previous question | previous question |
-| Esc, Ctrl+C | cancel | back to the last question |
+| Esc twice, Ctrl+C | cancel | cancel |
 
 Selecting the `Type something.` row opens an inline editor. Enter submits the
 typed answer, Esc returns to the option list without losing it, and Shift+Enter
 (or Ctrl+J) inserts a newline.
+
+The first Esc arms cancellation and the footer changes to `esc again to cancel`.
+A second Esc within two seconds cancels. Escapes closer than 300 ms are treated
+as one stray key, so a keypad or terminal sequence that degrades into two
+Escapes cannot close the dialog or interrupt the turn. Ctrl+C still cancels
+immediately.
 
 ## Capability gating
 
