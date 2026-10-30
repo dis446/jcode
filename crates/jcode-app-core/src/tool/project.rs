@@ -126,7 +126,9 @@ impl ProjectToolSpec {
             bail!("tool '{name}' has an empty description");
         }
         if description.len() > MAX_DESCRIPTION_BYTES {
-            bail!("tool '{name}' description exceeds {MAX_DESCRIPTION_BYTES} bytes");
+            bail!(
+                "tool '{name}' description exceeds {MAX_DESCRIPTION_BYTES} bytes"
+            );
         }
         if entry.command.is_empty() {
             bail!("tool '{name}' has no command");
@@ -146,7 +148,9 @@ impl ProjectToolSpec {
                         bail!("tool '{name}' parameters.required must be an array");
                     };
                     if !required.iter().all(Value::is_string) {
-                        bail!("tool '{name}' parameters.required entries must be strings");
+                        bail!(
+                            "tool '{name}' parameters.required entries must be strings"
+                        );
                     }
                 }
                 Value::Object(map)
@@ -155,7 +159,9 @@ impl ProjectToolSpec {
             None => json!({"type": "object", "properties": {}}),
         };
         if parameters.to_string().len() > MAX_PARAMETERS_BYTES {
-            bail!("tool '{name}' parameters exceed {MAX_PARAMETERS_BYTES} bytes");
+            bail!(
+                "tool '{name}' parameters exceed {MAX_PARAMETERS_BYTES} bytes"
+            );
         }
         let timeout_secs = entry
             .timeout_secs
