@@ -91,8 +91,9 @@ Cancelled or timed out:
 ```
 
 Cancellation is a normal tool result, not an error, so the model can respond
-gracefully. Missing client support is an error that tells the model to ask in
-prose.
+gracefully. A request that reaches a client which cannot render questions comes
+back as a cancelled result with that reason, and a request with no interactive
+client attached is an error that tells the model to ask in prose.
 
 ## Layout
 
