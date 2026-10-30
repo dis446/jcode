@@ -456,3 +456,55 @@ async fn deferred_cancel_reset_does_not_erase_newer_cancel() {
         "the newest cancel's deferred reset should eventually clear the flag"
     );
 }
+
+/// CUSTOM (C8): Ctrl-C must stop a detached `!cmd` or project command, which
+/// has no turn task for `cancel_processing_message` to await. The shell
+/// registry is the only thing that can reach it.
+#[tokio::test]
+async fn cancel_processing_message_cancels_registered_input_shells() {
+    let session = "session_shell_cancel";
+    let control = SessionControlHandle::cancel_only(
+        session,
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+        InterruptSignal::new(),
+    );
+    let shell = crate::input_shell_registry::register(session, 7);
+    let cancel = shell.cancel_handle();
+
+    let (client_event_tx, _client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+    let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+    let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+    let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+    let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (swarm_event_tx, _) = broadcast::channel(8);
+    let mut client_is_processing = false;
+    let mut message_id = None;
+    let mut session_id = None;
+    let mut task = None;
+
+    cancel_processing_message(
+        &mut ProcessingState {
+            client_is_processing: &mut client_is_processing,
+            message_id: &mut message_id,
+            session_id: &mut session_id,
+            task: &mut task,
+        },
+        &control,
+        &client_event_tx,
+        &SwarmStatusRefs {
+            members: &swarm_members,
+            swarms_by_id: &swarms_by_id,
+            event_history: &event_history,
+            event_counter: &event_counter,
+            event_tx: &swarm_event_tx,
+        },
+        Some(7),
+        None,
+        None,
+    )
+    .await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), cancel.notified())
+        .await
+        .expect("cancel must reach the running input shell");
+}
