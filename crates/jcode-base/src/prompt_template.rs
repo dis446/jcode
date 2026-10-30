@@ -122,11 +122,11 @@ impl PromptTemplateRegistry {
     /// Load every template source for `working_dir`, later sources winning on a
     /// name clash.
     pub fn load_for_working_dir(working_dir: Option<&Path>) -> Self {
-        let global = crate::storage::jcode_dir()
-            .ok()
-            .map(|dir| dir.join("prompts"));
-        let agents = crate::storage::user_home_path(".agents/prompts").ok();
-        Self::load_from_roots(working_dir, global.as_deref(), agents.as_deref())
+        let mut registry = Self::default();
+        for dir in source_dirs(working_dir) {
+            registry.load_dir(&dir);
+        }
+        registry
     }
 
     /// Explicit roots, so tests and hosts that resolve the directories
@@ -269,6 +269,70 @@ impl PromptTemplateRegistry {
         }
         self.templates.push(template);
     }
+}
+
+/// Directories consulted for `working_dir`, in load order.
+///
+/// Kept beside [`PromptTemplateRegistry::load_for_working_dir`] so the loader
+/// and the freshness fingerprint cannot drift apart.
+pub fn source_dirs(working_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(dir) = crate::storage::jcode_dir() {
+        dirs.push(dir.join("prompts"));
+    }
+    if let Ok(dir) = crate::storage::user_home_path(".agents/prompts") {
+        dirs.push(dir);
+    }
+    let root = working_dir.unwrap_or_else(|| Path::new("."));
+    dirs.push(root.join(".jcode").join("prompts"));
+    dirs.push(root.join(".agents").join("prompts"));
+    dirs
+}
+
+/// Cheap fingerprint of the template sources for `working_dir`.
+///
+/// Changes when a template is added, removed, renamed, or edited, or when a
+/// source directory appears or disappears. Callers use it to refresh a cached
+/// registry without re-reading every body on each lookup.
+pub fn source_stamp(working_dir: Option<&Path>) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for dir in source_dirs(working_dir) {
+        dir.hash(&mut hasher);
+        let mut files: Vec<(PathBuf, u64, u128)> = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("md"))
+                .filter_map(|entry| {
+                    let path = entry.path();
+                    let metadata = std::fs::metadata(&path).ok()?;
+                    if !metadata.is_file() {
+                        return None;
+                    }
+                    let modified = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or_default();
+                    Some((path, metadata.len(), modified))
+                })
+                .collect(),
+            Err(_) => {
+                // A missing directory and an unreadable one both produce no
+                // evidence. The directory path is already hashed.
+                Vec::new()
+            }
+        };
+        files.sort();
+        for (path, len, modified) in files {
+            path.hash(&mut hasher);
+            len.hash(&mut hasher);
+            modified.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 /// Frontmatter fields jcode understands. Unknown keys are ignored: this is
@@ -560,6 +624,27 @@ mod tests {
             "Explain this code."
         );
         assert_eq!(registry.list().len(), 2);
+    }
+
+    #[test]
+    fn source_stamp_changes_when_templates_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = source_stamp(Some(dir.path()));
+
+        write_template(dir.path(), "review.md", "body");
+        let added = source_stamp(Some(dir.path()));
+        assert_ne!(added, empty, "a new template must change the stamp");
+
+        write_template(dir.path(), "review.md", "a different body");
+        let edited = source_stamp(Some(dir.path()));
+        assert_ne!(edited, added, "an edited template must change the stamp");
+
+        fs::remove_file(dir.path().join(".jcode/prompts/review.md")).unwrap();
+        assert_eq!(
+            source_stamp(Some(dir.path())),
+            empty,
+            "removing the template returns to the empty stamp"
+        );
     }
 
     #[test]

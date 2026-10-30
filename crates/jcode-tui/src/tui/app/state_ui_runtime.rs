@@ -119,8 +119,10 @@ impl App {
         if self.is_remote && working_dir.is_none() {
             return std::sync::Arc::new(crate::prompt_template::PromptTemplateRegistry::default());
         }
+        let stamp = crate::prompt_template::source_stamp(working_dir.as_deref());
         if let Some(cache) = self.prompt_templates_cache.borrow().as_ref()
             && cache.working_dir == working_dir
+            && cache.stamp == stamp
         {
             return std::sync::Arc::clone(&cache.templates);
         }
@@ -157,6 +159,7 @@ impl App {
         let registry = std::sync::Arc::new(registry);
         *self.prompt_templates_cache.borrow_mut() = Some(super::PromptTemplateCache {
             working_dir,
+            stamp,
             templates: std::sync::Arc::clone(&registry),
         });
         self.invalidate_command_candidates_cache();

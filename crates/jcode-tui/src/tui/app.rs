@@ -63,6 +63,7 @@ mod catchup;
 mod commands;
 mod commit_log;
 pub(crate) use commit_log::CommitLogOverlay;
+mod at_file;
 mod cloud_environment;
 mod commands_cloud;
 mod commands_colors;
@@ -101,7 +102,6 @@ pub(crate) mod onboarding_graph;
 mod onboarding_repair;
 mod onboarding_sim;
 mod productivity;
-mod at_file;
 mod prompt_history;
 mod question_overlay;
 mod remote;
@@ -816,6 +816,9 @@ struct CommandCandidatesCache {
     /// Working dir the candidate list was built for, so a session switch cannot
     /// keep serving the previous project's command names.
     working_dir: Option<std::path::PathBuf>,
+    /// Prompt-template fingerprint the list was built from, so a template added
+    /// mid-session appears without a restart.
+    template_stamp: u64,
 }
 
 /// Project commands resolved for one session working directory.
@@ -827,6 +830,7 @@ pub(crate) struct ProjectCommandCache {
 /// Prompt templates resolved for one session working directory.
 pub(crate) struct PromptTemplateCache {
     working_dir: Option<std::path::PathBuf>,
+    stamp: u64,
     templates: std::sync::Arc<crate::prompt_template::PromptTemplateRegistry>,
 }
 

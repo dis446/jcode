@@ -317,8 +317,10 @@ impl App {
             .working_dir
             .as_deref()
             .map(std::path::PathBuf::from);
+        let template_stamp = crate::prompt_template::source_stamp(working_dir.as_deref());
         if let Some(cache) = self.command_candidates_cache.borrow().as_ref()
             && cache.working_dir == working_dir
+            && cache.template_stamp == template_stamp
         {
             return cache.candidates.clone();
         }
@@ -379,6 +381,7 @@ impl App {
         *self.command_candidates_cache.borrow_mut() = Some(CommandCandidatesCache {
             candidates: commands.clone(),
             working_dir,
+            template_stamp,
         });
         commands
     }

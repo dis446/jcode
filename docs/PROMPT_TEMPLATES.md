@@ -32,8 +32,9 @@ cross-tool portability; pi itself reads `~/.pi/agent/prompts/` and
 
 Nothing executes at load. A malformed, oversized, or badly named file is skipped
 with a warning and never blocks session start. Files are re-read when the
-working directory changes and each time a template is invoked, so an edit or a
-new file takes effect without restarting the daemon (pi asks for `/reload`;
+working directory changes, each time a template is invoked, and whenever the
+source directories' fingerprint changes, so a new or edited file also appears in
+completion and `/help` without restarting the daemon (pi asks for `/reload`;
 jcode does not).
 
 ## Format

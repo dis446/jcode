@@ -146,6 +146,37 @@ fn template_appears_in_help_and_completion() {
 }
 
 #[test]
+fn added_template_appears_in_help_and_completion_without_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_templates(dir.path());
+
+    // Warm both caches before the file exists, which is what a live session
+    // does the first time the composer shows slash suggestions.
+    assert!(
+        app.prompt_template_entries()
+            .iter()
+            .all(|(name, _)| name != "/tpl-late")
+    );
+    assert!(app.get_suggestions_for("/").iter().all(|(name, _)| name != "/tpl-late"));
+
+    write_template(dir.path(), "tpl-late", "Late body.");
+
+    assert!(
+        app.prompt_template_entries()
+            .iter()
+            .any(|(name, _)| name == "/tpl-late"),
+        "a template added mid-session must show in /help"
+    );
+    let suggestions = app.get_suggestions_for("/tpl-late");
+    assert!(
+        suggestions
+            .iter()
+            .any(|(name, help)| name == "/tpl-late" && *help == "Prompt template"),
+        "{suggestions:?}"
+    );
+}
+
+#[test]
 fn editing_a_template_is_picked_up_without_a_restart() {
     let dir = tempfile::tempdir().unwrap();
     write_template(dir.path(), "tpl-review", "First body.");
