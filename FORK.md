@@ -257,8 +257,13 @@ Chosen layer: one predicate in the existing policy, no new mechanism.
 C16 verify: `cargo test -p jcode-app-core --lib handoff_tests` (the new
 `interactive_question_waits_in_the_foreground` passes; the pre-existing
 `nonstreaming_background_wait_returns_original_result_after_budget` is red on
-stock too, a paused-clock offset unrelated to this change), plus
-`cargo test -p jcode-app-core ask_user_question`, and
+stock too, a paused-clock offset unrelated to this change),
+`cargo test -p jcode-tui --lib -- tui::app::tests::question` (dialog opens,
+another tool finishing keeps it, the question's own completion dismisses it and
+reveals the queued one), `cargo test --test e2e
+ask_user_question_round_trip_through_server` (holds the question 4 s and fails
+if a `ToolDone` arrives first; red on stock, green here), plus
+`cargo test -p jcode-app-core ask_user_question` and
 `e2e/run.py --binary <bin> --suite all`. Runtime: ask the model a question in
 the TUI; the dialog stays up past 3 s, the model waits, and the answer returns.
 C16 conflict hints: `blocks_on_user_input` sits above `auto_background_allowed`
