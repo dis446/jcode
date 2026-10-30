@@ -392,3 +392,26 @@ async fn batch_preserves_images_in_input_order_across_failures() {
     assert_eq!(output.images[1].media_type, "image/png");
     assert!(output.output.contains("Completed: 2 succeeded, 1 failed"));
 }
+
+#[tokio::test]
+async fn batch_rejects_interactive_question_subcalls() {
+    let registry = registry_with_batch_and_echo().await;
+    for requested in ["ask_user_question", "functions.ask_user_question"] {
+        let error = registry
+            .execute(
+                "batch",
+                json!({"tool_calls": [
+                    {"tool": requested, "intent": "ask", "questions": []}
+                ]}),
+                test_context(),
+            )
+            .await
+            .expect_err("an interactive question must not run inside a batch");
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot batch the interactive 'ask_user_question' tool"),
+            "{error}"
+        );
+    }
+}

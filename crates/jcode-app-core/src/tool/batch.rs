@@ -9,6 +9,11 @@ use std::collections::HashMap;
 
 const MAX_PARALLEL: usize = 10;
 
+/// Interactive tools own the turn until a human answers. Running one as a
+/// batch subcall would let the batch's 3 s foreground budget move the batch
+/// to the background while the dialog is still open.
+const INTERACTIVE_SUBCALLS: &[&str] = &["ask_user_question"];
+
 const BATCH_DESCRIPTION: &str = "Run independent tool calls in parallel (1-10). Each tool_calls entry contains tool, intent, and the tool's normal arguments as sibling fields. Do not batch dependent calls or nest batch.";
 
 pub(crate) fn generic_batch_schema() -> Value {
@@ -215,8 +220,15 @@ impl Tool for BatchTool {
 
         // Check for disallowed tools
         for tc in &params.tool_calls {
-            if Registry::resolve_tool_name(&tc.tool) == "batch" {
+            let name = Registry::resolve_tool_name(&tc.tool);
+            if name == "batch" {
                 return Err(anyhow::anyhow!("Cannot batch the 'batch' tool"));
+            }
+            if INTERACTIVE_SUBCALLS.contains(&name) {
+                return Err(anyhow::anyhow!(
+                    "Cannot batch the interactive '{}' tool; call it directly",
+                    name
+                ));
             }
         }
 

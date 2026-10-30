@@ -260,7 +260,9 @@ C16 verify: `cargo test -p jcode-app-core --lib handoff_tests` (the new
 stock too, a paused-clock offset unrelated to this change),
 `cargo test -p jcode-tui --lib -- tui::app::tests::question` (dialog opens,
 another tool finishing keeps it, the question's own completion dismisses it and
-reveals the queued one), `cargo test --test e2e
+reveals the queued one), `cargo test -p jcode-app-core --lib -- tool::batch`
+and `tool::codemode` (a nested question is rejected; both tests red without the
+guard), `cargo test --test e2e
 ask_user_question_round_trip_through_server` (holds the question 4 s and fails
 if a `ToolDone` arrives first; red on stock, green here), plus
 `cargo test -p jcode-app-core ask_user_question` and
@@ -270,7 +272,9 @@ C16 conflict hints: `blocks_on_user_input` sits above `auto_background_allowed`
 in `agent/tool_handoff.rs`; both the streaming turn (`turn_streaming_mpsc.rs`)
 and the blocking/SDK paths (`turn_loops.rs`, `execute_with_background`) go
 through that predicate, so a new tool-registry entry point that forks the
-policy must call it too.
+policy must call it too. Any new interactive tool must also be added to
+`tool/codemode.rs` `EXCLUDED` and `tool/batch.rs` `INTERACTIVE_SUBCALLS`, or a
+script/batch wrapper can still be backgrounded around it.
 Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
 extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
 `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.
