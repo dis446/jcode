@@ -178,6 +178,30 @@ last `||` arm of `dispatch_single_local_command` and the top of
 wire change is additive (`#[serde(default)]` on both new `InputShell` fields), so
 an older peer still decodes the request. `InputShell` has one other call site:
 `RemoteConnection::send_input_shell_with`.
+C9 best-way check: upstream has no prompt-template concept. A skill injects a
+standing system reminder and cannot substitute arguments into a user message;
+a project command runs a shell line and starts no turn; prompt-overlay.md is
+session-wide. Chosen layer: minimal additive fork code, one loader module plus
+thin hooks on the existing slash dispatch, completion, help and ACP paths.
+C9 verify: `cargo test -p jcode-base --lib prompt_template` (13 loader, argv and
+substitution tests), `cargo test -p jcode-tui --lib -- template_ built_in_and_project
+unknown_slash_text`, `cargo test -p jcode --lib acp` (skill/template command
+advertisement), and `e2e/run.py --binary <fork bin> --suite all` (including the
+`prompt_templates` suite that fails on stock by design). Runtime: a template in
+`~/.agents/prompts` or the repo's `.jcode/prompts` completes as `/name`, expands
+with `$1`/`$@`/`${1:-default}`, shows under /help "Prompt templates", and a file
+added mid-session needs no restart. Substitution is pi's exact table (checked
+against `dist/core/prompt-templates.js` in the installed package): missing
+positions become empty, `${@:N}`/`${@:N:L}` are supported, and there is no `\$`
+escape.
+C9 conflict hints: the TUI cache mirrors `project_commands_cache` in
+`app/state_ui_runtime.rs`; expansion hooks sit immediately before skill
+resolution in `app/input.rs::submit_input` and at the top of
+`app/remote/input_dispatch.rs::submit_remote_slash_input`. `TuiState` gains
+`prompt_template_entries` next to `project_command_entries` (2 impls). ACP
+templates resolve in `run_prompt` before `resolve_acp_skill_invocation` and are
+advertised by `acp_prompt_template_commands`, filtered against the
+`ACP_BUILTIN_COMMAND_NAMES` const and same-named skills.
 C5 best-way check: no upstream question tool exists, no config, skill, or MCP
 path can render a native structured dialog, and the blocking tool-to-client
 interactive-input primitive already exists. Chosen layer: minimal additive fork
