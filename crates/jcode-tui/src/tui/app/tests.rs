@@ -1946,3 +1946,5 @@ include!("tests/cache_prompt_accounting.rs");
 include!("tests/project_commands.rs");
 
 include!("tests/prompt_templates.rs");
+
+include!("tests/question_overlay_lifecycle.rs"); // CUSTOM (C10)
