@@ -45,6 +45,26 @@ def t_project_command_runs_shell_without_a_turn(b, v):
         assert "e2e-say" in screen
 
 
+def t_project_command_added_after_cache_prime_appears(b, v):
+    with Session(b) as s:
+        s.wait_ready()
+        # Prime command completion with no .jcode/commands.json present.
+        s.type("/")
+        s.settle(quiet=0.3)
+        s.key("Escape")
+        s.key("C-u")
+        install_commands(s, [
+            {
+                "name": "e2e-late",
+                "description": "Added after the cache was primed",
+                "command": "printf e2e-late-ok",
+            }
+        ])
+        s.type("/e2e-late")
+        s.key("Enter")
+        s.wait_text("e2e-late-ok")
+
+
 def t_project_command_arguments_reach_the_shell_verbatim(b, v):
     with Session(b) as s:
         install_commands(s, [
