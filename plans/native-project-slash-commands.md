@@ -261,3 +261,12 @@ test, because the refusal needs a live `RemoteConnection`.
 4. Visible in both `/help` and completion.
 5. Execution is daemon-side through `Request::InputShell`; there is no separate
    protocol request.
+6. The ledger entry is C8: the fork master this branch rebased onto already used
+   C5 (`ask_user_question`), C6 (Herdr graphics) and C7 (todo doc).
+
+The review after that rebase added three hardening changes: the daemon clamps a
+client-supplied deadline (an unchecked `u64::MAX` overflows `Instant + Duration`),
+descriptions reject control characters because a repo file is drawn straight into
+`/help`, and the completion candidate cache is keyed on the working dir so a
+project switch cannot keep offering the previous project's names. A protocol test
+pins that an older peer's `input_shell` payload still decodes.
