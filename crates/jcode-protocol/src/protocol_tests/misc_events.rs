@@ -114,6 +114,27 @@ fn test_input_shell_request_roundtrip() -> Result<()> {
 }
 
 #[test]
+fn test_input_shell_request_accepts_a_legacy_payload() -> Result<()> {
+    // Older peers send only `id` and `command`; both new fields are additive.
+    let json = r#"{"type":"input_shell","id":89,"command":"ls"}"#;
+    let decoded = parse_request_json(json)?;
+    let Request::InputShell {
+        id,
+        command,
+        cwd,
+        timeout_secs,
+    } = decoded
+    else {
+        return Err(anyhow!("expected InputShell request"));
+    };
+    assert_eq!(id, 89);
+    assert_eq!(command, "ls");
+    assert_eq!(cwd, None);
+    assert_eq!(timeout_secs, None);
+    Ok(())
+}
+
+#[test]
 fn test_input_shell_result_event_roundtrip() -> Result<()> {
     let event = ServerEvent::InputShellResult {
         result: jcode_message_types::InputShellResult {
