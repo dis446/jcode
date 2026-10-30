@@ -638,4 +638,30 @@ mod tests {
         let output = handle.await.unwrap().unwrap();
         assert!(output.output.contains("\"status\":\"cancelled\""));
     }
+
+    #[tokio::test]
+    async fn disconnected_client_yields_a_cancelled_result() {
+        // The connection teardown path clears `stdin_responses`, which drops
+        // the response sender while the tool is waiting. That must end the
+        // call promptly with a cancelled result, not leave the turn blocked
+        // until `timeout_secs` or forever.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut ctx = context();
+        ctx.stdin_request_tx = Some(tx);
+        let tool = AskUserQuestionTool::new();
+        let handle = tokio::spawn(async move {
+            tool.execute(
+                json!({"intent": "Choose", "questions": [{"id": "a", "question": "A?", "options": [{"value": "x", "label": "X"}]}]}),
+                ctx,
+            )
+            .await
+        });
+        let request = rx.recv().await.expect("request");
+        assert_eq!(request.tool_call_id, "call");
+        drop(request);
+        let output = handle.await.unwrap().unwrap();
+        let body: Value = serde_json::from_str(&output.output).expect("cancelled json");
+        assert_eq!(body["status"], "cancelled");
+        assert_eq!(body["reason"], "interactive client disconnected");
+    }
 }
