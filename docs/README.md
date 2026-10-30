@@ -21,6 +21,7 @@ Reference documentation for the jcode codebase.
 - Providers: `PROVIDER_DOCTOR.md`, `AWS_BEDROCK_PROVIDER.md`
 - MCP servers: `MCP_REMOTE.md`
 - Platform: `WINDOWS.md`, `TERMINAL_CAPABILITIES.md`
+- TUI info widget (margin overview, side widgets): `INFO_WIDGET.md`
 
 ## Conventions
 
