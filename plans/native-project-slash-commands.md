@@ -1,6 +1,6 @@
 # Feature request: native project slash commands (shell, no model turn)
 
-Status: implemented (fork C8, branch `feature/native-project-commands`)
+Status: merged in fork `master`, installed as 0.99.407-dev
 Owner: jcode fork (C8)
 Related: C2 project-defined tools (`docs/PROJECT_TOOLS.md`), qLab `/feature-*` skills
 
