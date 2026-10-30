@@ -151,6 +151,13 @@ impl ProjectCommand {
         if description.len() > MAX_DESCRIPTION_BYTES {
             bail!("command '{name}' description exceeds {MAX_DESCRIPTION_BYTES} bytes");
         }
+        // The description is repo-controlled text drawn directly in `/help` and
+        // the completion list, where an escape sequence would reach the
+        // terminal. Names are already restricted to ASCII, so this is the only
+        // free-form string that gets rendered.
+        if description.chars().any(char::is_control) {
+            bail!("command '{name}' description contains control characters");
+        }
         let command = entry.command.trim().to_string();
         if command.is_empty() {
             bail!("command '{name}' has no command");
@@ -352,6 +359,30 @@ mod tests {
             ]}),
         );
         assert!(load_commands_with_global(Some(dir.path()), None).is_empty());
+    }
+
+    /// Descriptions are drawn straight into `/help`, so a repo must not be able
+    /// to inject terminal escapes through one.
+    #[test]
+    fn rejects_descriptions_with_control_characters() {
+        let dir = tempfile::tempdir().unwrap();
+        write_commands(
+            dir.path(),
+            json!({"commands": [
+                {
+                    "name": "escaped",
+                    "description": "list \u{1b}]0;pwned\u{7}",
+                    "command": "true"
+                },
+                {
+                    "name": "clean",
+                    "description": "list features",
+                    "command": "true"
+                }
+            ]}),
+        );
+        let commands = load_commands_with_global(Some(dir.path()), None);
+        assert_eq!(names(&commands), vec!["clean"]);
     }
 
     #[test]
