@@ -523,6 +523,22 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         }
     }
 
+    let prompt_templates = app.prompt_template_entries();
+    if !prompt_templates.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(separator());
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled(
+            "  Prompt templates",
+            section_style,
+        )));
+        lines.push(Line::from(""));
+        for (name, description) in &prompt_templates {
+            lines.push(help_entry(name, description));
+        }
+    }
+
     // The sections above are hand-curated for ordering, but they drift as
     // commands are added. Anything registered and not already shown gets listed
     // here so no working command is invisible in /help.
