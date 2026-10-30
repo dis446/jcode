@@ -120,3 +120,55 @@ fn queued_question_opens_after_the_current_one_finishes() {
     app.handle_server_event(crate::protocol::ServerEvent::Interrupted, &mut remote);
     assert!(app.question_overlay.is_none());
 }
+
+fn question_frame_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> String {
+    let buffer = terminal.backend().buffer();
+    let area = buffer.area;
+    let mut out = String::new();
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            out.push_str(buffer[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[test]
+fn question_dialog_draws_over_the_transcript_while_the_tool_runs() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    // Mirror the incident: a turn is running and the model is inside the
+    // question tool when the request arrives.
+    app.is_processing = true;
+    app.status = ProcessingStatus::RunningTool("ask_user_question".to_string());
+    app.push_display_message(crate::tui::app::DisplayMessage::user("build the spec"));
+    app.handle_server_event(
+        question_request("ask-1", "call-question", "Which task?"),
+        &mut remote,
+    );
+
+    let backend = ratatui::backend::TestBackend::new(90, 24);
+    let mut terminal = ratatui::Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| crate::tui::ui::draw(frame, &app))
+        .expect("draw the question dialog");
+    let text = question_frame_text(&terminal);
+
+    assert!(
+        text.contains("Which task?"),
+        "question text missing from the frame:\n{text}"
+    );
+    assert!(
+        text.contains("Yes"),
+        "authored option missing from the frame:\n{text}"
+    );
+    // A dialog owns the whole frame; the transcript underneath is not visible.
+    assert!(
+        !text.contains("build the spec"),
+        "transcript leaked through the dialog frame:\n{text}"
+    );
+}
