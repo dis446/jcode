@@ -85,6 +85,43 @@ fn built_in_command_wins_over_a_project_command() {
 }
 
 #[test]
+fn switching_project_rebuilds_completion_candidates() {
+    let first = tempfile::tempdir().unwrap();
+    write_project_commands(
+        first.path(),
+        serde_json::json!({"commands": [
+            {"name": "first-cmd", "description": "First project", "command": "true"}
+        ]}),
+    );
+    let second = tempfile::tempdir().unwrap();
+    write_project_commands(
+        second.path(),
+        serde_json::json!({"commands": [
+            {"name": "second-cmd", "description": "Second project", "command": "true"}
+        ]}),
+    );
+
+    let mut app = app_with_project(first.path());
+    assert!(
+        app.get_suggestions_for("/first")
+            .iter()
+            .any(|(name, _)| name == "/first-cmd")
+    );
+
+    app.session.working_dir = Some(second.path().to_string_lossy().to_string());
+    assert!(
+        app.get_suggestions_for("/second")
+            .iter()
+            .any(|(name, _)| name == "/second-cmd")
+    );
+    assert!(
+        !app.get_suggestions_for("/first")
+            .iter()
+            .any(|(name, _)| name == "/first-cmd")
+    );
+}
+
+#[test]
 fn resolver_builds_the_shell_line_cwd_and_timeout() {
     let dir = tempfile::tempdir().unwrap();
     write_project_commands(

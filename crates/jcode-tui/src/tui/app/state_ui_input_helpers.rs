@@ -312,7 +312,14 @@ impl App {
     }
 
     fn command_candidates(&self) -> Vec<(String, &'static str)> {
-        if let Some(cache) = self.command_candidates_cache.borrow().as_ref() {
+        let working_dir = self
+            .session
+            .working_dir
+            .as_deref()
+            .map(std::path::PathBuf::from);
+        if let Some(cache) = self.command_candidates_cache.borrow().as_ref()
+            && cache.working_dir == working_dir
+        {
             return cache.candidates.clone();
         }
 
@@ -362,6 +369,7 @@ impl App {
 
         *self.command_candidates_cache.borrow_mut() = Some(CommandCandidatesCache {
             candidates: commands.clone(),
+            working_dir,
         });
         commands
     }
