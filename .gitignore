@@ -13,6 +13,7 @@ __pycache__/
 !/.jcode/skills/
 !/.jcode/tools.json
 !/.jcode/commands.json
+!/.jcode/prompts/
 !/.jcode/semantic-todo-migration-spec.md
 /telemetry-worker/backups/
 target-ttest/
