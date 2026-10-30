@@ -13,9 +13,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::collections::{BTreeSet, HashMap};
+use unicode_width::UnicodeWidthStr;
 
 /// A request waiting for the dialog to become free.
 #[derive(Debug, Clone)]
@@ -483,108 +484,180 @@ impl QuestionOverlay {
         rows
     }
 
-    pub fn render(&mut self, frame: &mut Frame) {
-        let area = frame.area();
+    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        // Pi paints the dialog over the transcript rather than clearing the
+        // whole terminal. Keep only this panel opaque so surrounding chat stays
+        // visible above it.
+        frame.render_widget(Clear, area);
         frame.render_widget(
             Block::default().style(Style::default().bg(rgb(18, 18, 22))),
             area,
         );
+
+        let tabs = self.tab_labels();
+        let show_tabs = tabs.len() > 1 || self.phase == Phase::Review;
+        let question = self
+            .node()
+            .map(|node| node.question.clone())
+            .unwrap_or_default();
+        let heading_height = wrapped_height(&question, area.width);
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
+                Constraint::Length(if show_tabs { 2 } else { 0 }),
+                Constraint::Length(heading_height),
+                Constraint::Min(1),
                 Constraint::Length(1),
-                Constraint::Length(4),
-                Constraint::Min(3),
-                Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Length(1),
             ])
             .split(area);
 
-        self.render_header(frame, chunks[0]);
-        self.render_progress(frame, chunks[1]);
+        self.render_rule(frame, chunks[0]);
+        if show_tabs {
+            self.render_tabs(frame, chunks[1], &tabs);
+        }
         self.render_prompt(frame, chunks[2]);
         match self.phase {
             Phase::Asking => self.render_options(frame, chunks[3]),
             Phase::Review => self.render_review(frame, chunks[3]),
         }
-        self.render_detail(frame, chunks[4]);
-        self.render_footer(frame, chunks[5]);
+        self.render_rule(frame, chunks[5]);
+        self.render_footer(frame, chunks[6]);
     }
 
-    fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let count = format!("{} answered", self.answers.len());
-        let count_width = count.chars().count();
-        let width = area.width as usize;
-        let intent_width = width.saturating_sub(count_width + 2);
+    /// Natural panel height for the current content. The caller caps it at the
+    /// terminal's row budget; short dialogs stay compact instead of reserving
+    /// 70% of the screen.
+    pub fn preferred_height(&self, width: u16) -> u16 {
+        let tabs = self.tab_labels();
+        let show_tabs = tabs.len() > 1 || self.phase == Phase::Review;
+        let question = if self.phase == Phase::Review {
+            "Review answers".to_string()
+        } else {
+            self.node()
+                .map(|node| node.question.clone())
+                .unwrap_or_default()
+        };
+        let body_rows = match self.phase {
+            Phase::Review => self.review_rows().len(),
+            Phase::Asking => {
+                let Some(node) = self.node() else {
+                    return 6;
+                };
+                let option_rows: usize = node
+                    .options
+                    .iter()
+                    .map(|option| {
+                        1 + usize::from(
+                            option
+                                .description
+                                .as_deref()
+                                .is_some_and(|description| !description.trim().is_empty()),
+                        )
+                    })
+                    .sum();
+                option_rows + usize::from(node.allow_custom)
+            }
+        };
+        let rows = 1
+            + u16::from(show_tabs) * 2
+            + wrapped_height(&question, width)
+            + (body_rows.max(1) as u16)
+            + 3; // spacer, bottom rule, footer
+        rows.max(6)
+    }
+
+    fn render_rule(&self, frame: &mut Frame, area: Rect) {
+        if area.width == 0 {
+            return;
+        }
+        let line = "─".repeat(area.width as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                line,
+                Style::default().fg(rgb(85, 85, 110)),
+            ))),
+            area,
+        );
+    }
+
+    /// `(label, answered, active)` for the tab strip. Only questions on the
+    /// answered path are known without choosing a branch, so the strip shows
+    /// those plus the current node.
+    fn tab_labels(&self) -> Vec<(String, bool, bool)> {
+        let mut tabs = Vec::new();
+        let mut seen = BTreeSet::new();
+        for answer in &self.answers {
+            if self.phase == Phase::Asking && answer.question_id == self.current {
+                continue;
+            }
+            if !seen.insert(answer.question_id.clone()) {
+                continue;
+            }
+            if let Some(node) = self.nodes.get(&answer.question_id) {
+                tabs.push((tab_label(node), true, false));
+            }
+        }
+        if self.phase == Phase::Asking
+            && let Some(node) = self.node()
+            && seen.insert(node.id.clone())
+        {
+            tabs.push((tab_label(node), false, true));
+        }
+        tabs
+    }
+
+    fn render_tabs(&self, frame: &mut Frame, area: Rect, tabs: &[(String, bool, bool)]) {
         let mut spans = vec![
             Span::styled(
-                truncate_text(&single_line(&self.intent), intent_width),
-                Style::default()
-                    .fg(rgb(235, 235, 240))
-                    .add_modifier(Modifier::BOLD),
+                format!(" {} ", truncate_text(&single_line(&self.intent), 24)),
+                Style::default().fg(rgb(150, 150, 162)),
             ),
-            Span::styled("  ", Style::default()),
-            Span::styled(count, Style::default().fg(rgb(110, 110, 120))),
+            Span::styled(" ", Style::default()),
         ];
-        let line = Line::from(std::mem::take(&mut spans));
-        let line = truncate_line_with_ellipsis_to_width(&line, width);
-        frame.render_widget(Paragraph::new(line), area);
-    }
-
-    fn render_progress(&self, frame: &mut Frame, area: Rect) {
-        let number = self.answers.len() + 1;
-        let mut text = format!("Question {number}");
-        if !self.answers.is_empty() {
-            text.push_str("  ");
-            text.push_str(&self.breadcrumb());
-        }
-        let line = Line::from(Span::styled(text, Style::default().fg(rgb(150, 150, 160))));
-        let line = truncate_line_with_ellipsis_to_width(&line, area.width as usize);
-        frame.render_widget(Paragraph::new(line), area);
-    }
-
-    fn breadcrumb(&self) -> String {
-        let mut parts = Vec::new();
-        for answer in &self.answers {
-            let Some(node) = self.nodes.get(&answer.question_id) else {
-                continue;
-            };
-            let label = node
-                .header
-                .as_deref()
-                .map(single_line)
-                .unwrap_or_else(|| "Question".to_string());
-            let value = if answer.selected.is_empty() {
-                answer.custom.clone().unwrap_or_default()
+        for (label, answered, active) in tabs {
+            let marker = if *answered { "■" } else { "□" };
+            let text = format!(" {marker} {label} ");
+            let style = if *active {
+                Style::default()
+                    .bg(rgb(45, 45, 55))
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else if *answered {
+                Style::default().fg(rgb(120, 200, 150))
             } else {
-                answer
-                    .selected
-                    .iter()
-                    .map(|selected| {
-                        node.options
-                            .iter()
-                            .find(|option| &option.value == selected)
-                            .map(|option| option.label.as_str())
-                            .unwrap_or(selected.as_str())
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                Style::default().fg(rgb(120, 120, 132))
             };
-            parts.push(format!("{label}: {}", single_line(&value)));
+            spans.push(Span::styled(text, style));
+            spans.push(Span::styled(" ", Style::default()));
         }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!(" › {}", parts.join(" › "))
+        if self.phase == Phase::Review {
+            spans.push(Span::styled(
+                " ✓ Submit ",
+                Style::default()
+                    .bg(rgb(45, 45, 55))
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ));
         }
+        let line = truncate_line_with_ellipsis_to_width(&Line::from(spans), area.width as usize);
+        frame.render_widget(Paragraph::new(line), area);
     }
 
     fn render_prompt(&self, frame: &mut Frame, area: Rect) {
-        let text = self
-            .node()
-            .map(|node| node.question.clone())
-            .unwrap_or_default();
+        let text = if self.phase == Phase::Review {
+            "Review answers".to_string()
+        } else {
+            self.node()
+                .map(|node| node.question.clone())
+                .unwrap_or_default()
+        };
         frame.render_widget(
             Paragraph::new(text)
                 .wrap(Wrap { trim: false })
@@ -610,24 +683,49 @@ impl QuestionOverlay {
             } else {
                 Style::default().fg(rgb(90, 90, 100))
             };
-            items.push(ListItem::new(Line::from(vec![
+            let number = format!("{}. ", index + 1);
+            let indent = " ".repeat(number.chars().count());
+            let mut lines = vec![Line::from(vec![
+                Span::styled(number, Style::default().fg(rgb(110, 110, 122))),
                 Span::styled(marker, marker_style),
                 Span::styled(
                     single_line(&option.label),
                     Style::default().fg(rgb(225, 225, 230)),
                 ),
-            ])));
+            ])];
+            if let Some(description) = option.description.as_deref()
+                && !description.trim().is_empty()
+            {
+                lines.push(Line::from(vec![
+                    Span::styled(indent, Style::default()),
+                    Span::styled(
+                        single_line(description),
+                        Style::default().fg(rgb(140, 140, 152)),
+                    ),
+                ]));
+            }
+            items.push(ListItem::new(lines));
         }
         if node.allow_custom {
-            let text = if self.custom.is_empty() {
-                "Type something.".to_string()
+            let (text, style) = if self.editing_custom {
+                let mut shown = self.custom.clone();
+                shown.push('▎');
+                (
+                    format!("> {shown}"),
+                    Style::default().fg(rgb(235, 235, 240)),
+                )
+            } else if self.custom.is_empty() {
+                (
+                    "+ Type something.".to_string(),
+                    Style::default().fg(rgb(150, 150, 160)),
+                )
             } else {
-                format!("Type something: {}", single_line(&self.custom))
+                (
+                    format!("+ Type something: {}", single_line(&self.custom)),
+                    Style::default().fg(rgb(190, 190, 200)),
+                )
             };
-            items.push(ListItem::new(Line::from(Span::styled(
-                text,
-                Style::default().fg(rgb(150, 150, 160)),
-            ))));
+            items.push(ListItem::new(Line::from(Span::styled(text, style))));
         }
         let list = List::new(items)
             .highlight_style(
@@ -636,7 +734,7 @@ impl QuestionOverlay {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("› ");
+            .highlight_symbol("");
         self.sync_list_state();
         frame.render_stateful_widget(list, area, &mut self.list_state);
     }
@@ -663,34 +761,15 @@ impl QuestionOverlay {
         frame.render_stateful_widget(list, area, &mut self.list_state);
     }
 
-    fn render_detail(&self, frame: &mut Frame, area: Rect) {
-        let text = if self.phase == Phase::Review {
-            "Review your answers, then submit. Left goes back to the last question.".to_string()
-        } else if self.editing_custom {
-            let mut shown = self.custom.clone();
-            shown.push('▎');
-            format!("> {shown}")
-        } else if self.showing_custom_row() {
-            "Type your own answer and press Enter.".to_string()
-        } else {
-            self.node()
-                .and_then(|node| node.options.get(self.selected))
-                .and_then(|option| option.description.clone())
-                .unwrap_or_default()
-        };
-        frame.render_widget(
-            Paragraph::new(text)
-                .wrap(Wrap { trim: false })
-                .style(Style::default().fg(rgb(140, 140, 150))),
-            area,
-        );
-    }
-
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let hints = if self.editing_custom {
-            "enter submit  esc back to list  shift+enter newline"
+            "enter submit · esc back to list · shift+enter newline"
+        } else if self.phase == Phase::Review {
+            "enter submit · ↑/↓ move · ← back · esc cancel"
+        } else if self.node().is_some_and(|node| node.multi_select) {
+            "enter confirm · space toggle · ↑/↓ move · ← back · esc cancel"
         } else {
-            "up/down move  enter select  left back  esc cancel"
+            "enter select · ↑/↓ move · ← back · esc cancel"
         };
         let line = Line::from(Span::styled(hints, Style::default().fg(rgb(90, 90, 100))));
         let line = truncate_line_with_ellipsis_to_width(&line, area.width as usize);
@@ -705,6 +784,27 @@ fn truncate_text(text: &str, width: usize) -> String {
         .into_iter()
         .map(|span| span.content.into_owned())
         .collect()
+}
+
+fn tab_label(node: &QuestionNode) -> String {
+    let raw = node
+        .header
+        .as_deref()
+        .filter(|header| !header.is_empty())
+        .map(single_line)
+        .unwrap_or_else(|| single_line(&node.question));
+    truncate_text(&raw, 22)
+}
+
+/// Rows a `Wrap { trim: false }` paragraph needs at the given width.
+fn wrapped_height(text: &str, width: u16) -> u16 {
+    let width = width.max(1) as usize;
+    let mut rows = 0usize;
+    for line in text.split('\n') {
+        let line_width = UnicodeWidthStr::width(line);
+        rows += line_width.div_ceil(width).max(1);
+    }
+    rows.max(1).min(u16::MAX as usize) as u16
 }
 
 /// Collapse embedded line breaks so list rows and chrome stay one visual row.
@@ -884,7 +984,10 @@ mod tests {
         let backend = TestBackend::new(40, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| overlay.render(frame))
+            .draw(|frame| {
+                let area = frame.area();
+                overlay.render(frame, area)
+            })
             .expect("render should succeed");
         let buffer = terminal.backend().buffer();
         for y in 0..20 {
@@ -895,5 +998,72 @@ mod tests {
             // exactly one buffer row for each of them.
             assert!(row.chars().count() <= 40);
         }
+    }
+
+    #[test]
+    fn renders_pi_style_tabs_and_option_descriptions() {
+        let mut overlay = QuestionOverlay::new(request());
+        overlay.handle_key(KeyCode::Enter, KeyModifiers::NONE, None);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                overlay.render(frame, area)
+            })
+            .expect("render should succeed");
+
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..24)
+            .map(|y| {
+                (0..80)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        let screen = rows.join("\n");
+        assert!(screen.contains("■ Task"), "answered tab missing: {screen}");
+        assert!(screen.contains("□ Area"), "active tab missing: {screen}");
+        assert!(
+            screen.contains("1. TUI"),
+            "numbered option missing: {screen}"
+        );
+        assert!(screen.contains("─"), "rule missing: {screen}");
+        assert!(
+            screen.contains("enter select"),
+            "footer hints missing: {screen}"
+        );
+    }
+
+    #[test]
+    fn render_stays_inside_the_given_panel() {
+        let mut overlay = QuestionOverlay::new(request());
+        let backend = TestBackend::new(40, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| overlay.render(frame, Rect::new(0, 12, 40, 12)))
+            .expect("render should succeed");
+
+        let buffer = terminal.backend().buffer();
+        for y in 0..12 {
+            for x in 0..40 {
+                assert_eq!(
+                    buffer[(x, y)].symbol(),
+                    " ",
+                    "row {y} column {x} changed outside the panel"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preferred_height_stays_compact_for_small_content() {
+        let overlay = QuestionOverlay::new(request());
+        let height = overlay.preferred_height(80);
+        assert!(
+            (6..=12).contains(&height),
+            "small dialog should stay compact, got {height}"
+        );
     }
 }

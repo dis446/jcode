@@ -1,9 +1,9 @@
 # Interactive questions
 
 `ask_user_question` lets the model ask the user a branching questionnaire
-instead of guessing. The TUI renders a full-frame dialog with authored options,
-an optional typed answer on every question, and a review screen. Answers return
-to the model as structured JSON.
+instead of guessing. The TUI renders an inline dialog panel above the status
+line with authored options, an optional typed answer on every question, and a
+review screen. Answers return to the model as structured JSON.
 
 The tool exists only in the interactive TUI. It is absent from headless runs,
 the SDK, the harness bridge, Desktop, and old clients.
@@ -93,6 +93,23 @@ Cancelled or timed out:
 Cancellation is a normal tool result, not an error, so the model can respond
 gracefully. Missing client support is an error that tells the model to ask in
 prose.
+
+## Layout
+
+The dialog follows the `@juicesharp/rpiv-ask-user-question` layout used by Pi:
+
+- It is composited over the transcript, not painted as a full-frame takeover.
+  The normal status line, notification, input, and anything above the panel stay
+  visible.
+- The panel is as tall as its current content needs, capped at 70% of terminal
+  rows (at least 12), and grows upward from the status line. Very short
+  terminals fall back to the full frame.
+- A horizontal rule opens the panel, a tab strip names the answered questions
+  and the current one (`■` answered, `□` active), and a second rule separates
+  the content from the key hints.
+- Options are numbered and carry their description on a dim second row, so the
+  selected choice is readable without a separate detail pane.
+- The review phase uses the same frame with a Review heading and Submit tab.
 
 ## TUI keys
 

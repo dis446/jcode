@@ -2634,7 +2634,7 @@ pub fn draw(frame: &mut Frame, app: &dyn TuiState) {
     app.advance_command_suggestions_epoch();
     crate::tui::mermaid::begin_terminal_image_frame();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::tui::markdown::with_deferred_mermaid_render_context(|| draw_inner(frame, app))
+        crate::tui::markdown::with_deferred_mermaid_render_context(|| draw_inner(frame, app, true))
     })) {
         Ok(()) => {}
         Err(payload) => render_recovered_panic_frame(frame, &payload),
@@ -2650,7 +2650,7 @@ pub fn draw(frame: &mut Frame, app: &dyn TuiState) {
     // This also drains deferred cache-eviction deletions when no image remains.
     crate::tui::mermaid::finish_terminal_image_frame(frame.buffer_mut());
 }
-fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
+fn draw_inner(frame: &mut Frame, app: &dyn TuiState, show_question: bool) {
     panel_image_preview::clear_regions();
     let area = frame.area().intersection(*frame.buffer_mut().area());
     if area.width == 0 || area.height == 0 {
@@ -2683,9 +2683,34 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         return;
     }
 
-    if let Some(overlay) = app.question_overlay() {
+    if show_question && app.question_overlay().is_some() {
+        // Pi mounts its questionnaire in the editor slot: the transcript above
+        // stays visible and the dialog grows upward from the status line. Draw
+        // the normal frame first, then paint the content-sized dialog over the
+        // transcript region, capped at 70% of the terminal and at least 12 rows.
+        draw_inner(frame, app, false);
+        let bottom = last_status_area()
+            .filter(|row| row.y > area.y && area.contains(row.as_position()))
+            .map(|row| row.y)
+            .unwrap_or_else(|| area.bottom());
+        let available = bottom.saturating_sub(area.y);
+        let preferred = app
+            .question_overlay()
+            .map(|overlay| overlay.borrow().preferred_height(area.width))
+            .unwrap_or(0);
+        let max_height = ((area.height as f32 * 0.7).floor() as u16).max(12);
+        let desired = preferred.min(max_height).min(area.height).max(6);
+        let panel = if available >= 6 {
+            let height = desired.min(available);
+            Rect::new(area.x, bottom - height, area.width, height)
+        } else {
+            area
+        };
+        let Some(overlay) = app.question_overlay() else {
+            return;
+        };
         let mut overlay = overlay.borrow_mut();
-        overlay.render(frame);
+        overlay.render(frame, panel);
         finalize_frame_metrics(
             app,
             total_start,
