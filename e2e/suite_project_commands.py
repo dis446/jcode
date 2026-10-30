@@ -1,4 +1,4 @@
-"""Project-defined slash commands (fork ledger C5). Fork build only.
+"""Project-defined slash commands (fork ledger C8). Fork build only.
 
 The stock binary has no `.jcode/commands.json` support, so these tests fail
 there by design.

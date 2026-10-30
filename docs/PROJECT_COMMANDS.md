@@ -4,7 +4,7 @@ A repository can declare deterministic, user-invoked slash commands next to the
 project tools it already declares. Typing the command runs one shell line and
 prints its output in the transcript. Unlike a skill, a command starts no model
 turn: no provider tokens, no tool call, and no dependence on the session's tool
-list. This is the fork's C5 change.
+list. This is the fork's C8 change.
 
 ## Files
 
