@@ -536,7 +536,9 @@ mod tests {
     }
 
     fn empty_registry(working_dir: &Path) -> PromptTemplateRegistry {
-        PromptTemplateRegistry::load_for_working_dir(Some(working_dir))
+        // Explicit empty global roots: the tests must not discover the running
+        // user's `~/.agents/prompts` or `$JCODE_HOME/prompts` files.
+        PromptTemplateRegistry::load_from_roots(Some(working_dir), None, None)
     }
 
     #[test]

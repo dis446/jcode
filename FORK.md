@@ -60,6 +60,15 @@ install entry point.
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
 
+Current series base: upstream `master` `3d16d77db` (2026-10-30 rebase; 50
+upstream commits after `b61e58b32`). The `Base` column above records the base
+at which each change was developed, not the current tip. All 87 fork commits
+replayed; the only conflict was `jcode-protocol/src/protocol_tests/misc_events.rs`
+where C5's question-wire test and upstream's `context_cap_wire_roundtrip` test
+were appended at the same point (resolved by keeping both). Verified with
+`cargo check --workspace --all-targets`, targeted fork unit tests, and
+`e2e/run.py --suite all`.
+
 C7 verify: docs only; no runtime gate applies. Repo-relative links in
 `docs/TODO_TASK_LIST.md` and the `docs/README.md` entry resolve inside `docs/`.
 
@@ -182,6 +191,12 @@ last `||` arm of `dispatch_single_local_command` and the top of
 wire change is additive (`#[serde(default)]` on both new `InputShell` fields), so
 an older peer still decodes the request. `InputShell` has one other call site:
 `RemoteConnection::send_input_shell_with`.
+C8 known gap (2026-10-30 rebase): upstream now snapshots per-session subprocess
+environment (`session_env`) for bash tool launches, but `run_input_shell` has no
+session id, so project command shells and the TUI local `!cmd` path do not
+inherit it. Project commands still see the daemon environment. Wiring the
+session id through those two spawn sites is a small follow-up if the override
+must apply there.
 C5 best-way check: no upstream question tool exists, no config, skill, or MCP
 path can render a native structured dialog, and the blocking tool-to-client
 interactive-input primitive already exists. Chosen layer: minimal additive fork
@@ -197,7 +212,10 @@ the capability apply helper sits beside `apply_or_defer_desktop_response_capabil
 the forwarder match sits in the existing `stdin_req_rx` loop; the TUI hooks sit
 beside the session-picker hooks in the two key paths, `draw_inner`, and the two
 App constructors. Protocol test struct literals are the first compile failure
-when upstream adds a `Subscribe` field.
+when upstream adds a `Subscribe` field. The question-wire tests appended at the
+end of `jcode-protocol/src/protocol_tests/misc_events.rs` conflict positionally
+with any upstream test added there; keep both blocks and restore the closing
+`Ok(())`/`}` of the upstream test.
 C9 best-way check: upstream has no prompt-template concept. A skill injects a
 standing system reminder and cannot substitute arguments into a user message;
 a project command runs a shell line and starts no turn; prompt-overlay.md is
@@ -270,7 +288,8 @@ See `e2e/README.md`.
 ## Status
 
 - Fork: `github.com/dis446/jcode`, default branch `master` (our commits on top of
-  upstream master; base recorded in `~/dotfiles/jcode/UPSTREAM_VERSION` = 0.99.1).
+  upstream master `3d16d77db`; base release recorded in
+  `~/dotfiles/jcode/UPSTREAM_VERSION` = 0.99.1).
   Checkout `~/Code/Personal/jcode`, `origin` = fork, `upstream` = `1jehuang/jcode`.
 - Install is owned by dotfiles: `~/dotfiles/scripts/jcode-install.sh` clones/updates
   this repo at `master`, builds with cargo, and installs
