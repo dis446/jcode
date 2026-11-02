@@ -270,6 +270,12 @@ reload while the tool is still waiting must reach a terminal client state),
 plus `cargo test -p jcode-app-core ask_user_question` and
 `e2e/run.py --binary <bin> --suite all`. Runtime: ask the model a question in
 the TUI; the dialog stays up past 3 s, the model waits, and the answer returns.
+C16 full-suite baseline: `cargo test -p jcode-app-core --lib` is 1844 passed /
+4 failed / 17 ignored with the change. All four are load- or host-dependent and
+unrelated (accepted reload recovery, provider failover model id, post-tool
+feedback hook, todo schema token cap). Reverting the product files gives 1839
+passed / 9 failed: the same unrelated set (a slightly different subset under
+load) plus the 4 new red-on-stock tests, so the change adds no failure.
 C16 conflict hints: `blocks_on_user_input` sits above `auto_background_allowed`
 in `agent/tool_handoff.rs`; both the streaming turn (`turn_streaming_mpsc.rs`)
 and the blocking/SDK paths (`turn_loops.rs`, `execute_with_background`) go
