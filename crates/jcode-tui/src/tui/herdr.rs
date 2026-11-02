@@ -45,6 +45,8 @@ impl AgentState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateReport {
     pub state: AgentState,
+    /// Short human reason for the state, shown in herdr's sidebar.
+    pub message: Option<String>,
     pub session_id: Option<String>,
     pub resume_argv: Option<Vec<String>>,
 }
@@ -93,6 +95,9 @@ static LAST_SEQ: Mutex<u64> = Mutex::new(0);
 /// than 0.9.2 fails the whole report with a usage error on the `--` resume
 /// separator, so after that we keep reporting state without it.
 static RESUME_UNSUPPORTED: AtomicBool = AtomicBool::new(false);
+/// Set once herdr rejects a report carrying `--message`. Older herdr versions
+/// do not know the flag, so after that we keep reporting state without it.
+static MESSAGE_UNSUPPORTED: AtomicBool = AtomicBool::new(false);
 
 fn reporter() -> Option<&'static Reporter> {
     REPORTER
@@ -121,23 +126,32 @@ fn reporter() -> Option<&'static Reporter> {
         .as_ref()
 }
 
+/// Whether this process is running inside a herdr pane. Entry points are
+/// no-ops elsewhere; callers can use this to skip building report details.
+pub fn enabled() -> bool {
+    reporter().is_some()
+}
+
 /// Report the current state and session. Cheap enough for every UI tick:
 /// outside herdr it returns immediately, and unchanged state is dropped
 /// without allocating. A newer report replaces one that has not been sent.
-pub fn sync(state: AgentState, session_id: Option<&str>) {
+pub fn sync(state: AgentState, message: Option<&str>, session_id: Option<&str>) {
     let Some(reporter) = reporter() else {
         return;
     };
+    let message = message.filter(|message| !message.trim().is_empty());
     let report = {
         let mut last = lock(&reporter.last_submitted);
-        if last
-            .as_ref()
-            .is_some_and(|last| last.state == state && last.session_id.as_deref() == session_id)
-        {
+        if last.as_ref().is_some_and(|last| {
+            last.state == state
+                && last.message.as_deref() == message
+                && last.session_id.as_deref() == session_id
+        }) {
             return;
         }
         let report = StateReport {
             state,
+            message: message.map(str::to_owned),
             session_id: session_id.map(str::to_owned),
             resume_argv: session_id
                 .and_then(|id| resume_argv_for_session(id, |key| std::env::var(key).ok())),
@@ -200,20 +214,38 @@ fn send_report(env: &HerdrEnv, mut report: StateReport) {
     if RESUME_UNSUPPORTED.load(Ordering::Relaxed) {
         report.resume_argv = None;
     }
-    let status = run_herdr(&env.bin, &report_args(&env.pane_id, &report, next_seq()));
-    // Only a usage error on a report that carried a resume command means
-    // "this herdr predates resume". Timeouts and other failures are retried
-    // naturally by the next state change and must not disable resume.
-    if !(is_usage_error(status) && resume_command(&report).is_some()) {
+    if MESSAGE_UNSUPPORTED.load(Ordering::Relaxed) {
+        report.message = None;
+    }
+    let mut status = run_herdr(&env.bin, &report_args(&env.pane_id, &report, next_seq()));
+    if !is_usage_error(status) {
         return;
     }
-    report.resume_argv = None;
-    let retry = run_herdr(&env.bin, &report_args(&env.pane_id, &report, next_seq()));
-    if retry.is_some_and(|status| status.success()) {
-        RESUME_UNSUPPORTED.store(true, Ordering::Relaxed);
-        crate::logging::info(
-            "herdr: this herdr rejects resume commands (needs 0.9.2+), reporting state only",
-        );
+    // A usage error means this herdr rejects one of the optional fields.
+    // Drop the resume command first (herdr < 0.9.2 rejects its `--`
+    // separator), then the message, so the state itself still lands.
+    // Timeouts and other failures are retried naturally by the next state
+    // change and must not disable an optional field.
+    if resume_command(&report).is_some() {
+        report.resume_argv = None;
+        status = run_herdr(&env.bin, &report_args(&env.pane_id, &report, next_seq()));
+        if !is_usage_error(status) {
+            if status.is_some_and(|status| status.success()) {
+                RESUME_UNSUPPORTED.store(true, Ordering::Relaxed);
+                crate::logging::info(
+                    "herdr: this herdr rejects resume commands (needs 0.9.2+), reporting state only",
+                );
+            }
+            return;
+        }
+    }
+    if report.message.is_some() {
+        report.message = None;
+        let retry = run_herdr(&env.bin, &report_args(&env.pane_id, &report, next_seq()));
+        if retry.is_some_and(|status| status.success()) {
+            MESSAGE_UNSUPPORTED.store(true, Ordering::Relaxed);
+            crate::logging::info("herdr: this herdr rejects --message, reporting state only");
+        }
     }
 }
 
@@ -263,6 +295,10 @@ fn report_args(pane_id: &str, report: &StateReport, seq: u64) -> Vec<String> {
     .map(|s| s.to_string())
     .collect();
     args.push(seq.to_string());
+    if let Some(message) = report.message.as_deref() {
+        args.push("--message".into());
+        args.push(message.to_string());
+    }
     if let Some(session_id) = report.session_id.as_deref() {
         args.push("--agent-session-id".into());
         args.push(session_id.to_string());
@@ -428,6 +464,7 @@ mod tests {
     fn report_args_include_resume_command_after_separator() {
         let report = StateReport {
             state: AgentState::Idle,
+            message: None,
             session_id: Some("session_fox_123".into()),
             resume_argv: resume_argv_for_session("session_fox_123", |_| None),
         };
@@ -459,11 +496,37 @@ mod tests {
     fn report_args_without_session_omit_resume() {
         let report = StateReport {
             state: AgentState::Working,
+            message: None,
             session_id: None,
             resume_argv: None,
         };
         let args = report_args("p1", &report, 7);
         assert_eq!(&args[7..], ["--state", "working", "--seq", "7"]);
+    }
+
+    #[test]
+    fn report_args_include_message_only_when_set() {
+        let report = StateReport {
+            state: AgentState::Working,
+            message: Some("3 workers running".into()),
+            session_id: Some("session_fox_123".into()),
+            resume_argv: resume_argv_for_session("session_fox_123", |_| None),
+        };
+        let args = report_args("p1", &report, 8);
+        assert_eq!(
+            &args[7..13],
+            [
+                "--state",
+                "working",
+                "--seq",
+                "8",
+                "--message",
+                "3 workers running"
+            ]
+        );
+        // The resume command stays after the `--` separator.
+        assert_eq!(&args[13..15], ["--agent-session-id", "session_fox_123"]);
+        assert_eq!(&args[15..17], ["--", "jcode"]);
     }
 
     #[test]
@@ -544,10 +607,15 @@ mod tests {
     #[cfg(unix)]
     impl FakeHerdr {
         fn new(resume_exit_code: i32) -> Self {
+            Self::with(resume_exit_code, None)
+        }
+
+        fn with(resume_exit_code: i32, message_exit_code: Option<i32>) -> Self {
             use std::os::unix::fs::PermissionsExt;
             static SERIAL: Mutex<()> = Mutex::new(());
             let serial = lock(&SERIAL);
             RESUME_UNSUPPORTED.store(false, Ordering::Relaxed);
+            MESSAGE_UNSUPPORTED.store(false, Ordering::Relaxed);
             let dir = std::env::temp_dir().join(format!(
                 "jcode-herdr-fake-{}-{}",
                 std::process::id(),
@@ -557,13 +625,18 @@ mod tests {
             let bin = dir.join("herdr");
             // The script logs next to itself via `$0` rather than embedding
             // the temp path, so any `TMPDIR` (spaces, quotes) works.
-            std::fs::write(
-                &bin,
-                format!(
-                    "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.log\"\nfor a in \"$@\"; do [ \"$a\" = -- ] && exit {resume_exit_code}; done\nexit 0\n"
-                ),
-            )
-            .unwrap();
+            let mut script =
+                String::from("#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.log\"\n");
+            if let Some(message_exit_code) = message_exit_code {
+                script.push_str(&format!(
+                    "for a in \"$@\"; do [ \"$a\" = --message ] && exit {message_exit_code}; done\n"
+                ));
+            }
+            script.push_str(&format!(
+                "for a in \"$@\"; do [ \"$a\" = -- ] && exit {resume_exit_code}; done\n"
+            ));
+            script.push_str("exit 0\n");
+            std::fs::write(&bin, script).unwrap();
             std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
             let env = HerdrEnv {
                 bin: bin.display().to_string(),
@@ -589,6 +662,7 @@ mod tests {
     impl Drop for FakeHerdr {
         fn drop(&mut self) {
             RESUME_UNSUPPORTED.store(false, Ordering::Relaxed);
+            MESSAGE_UNSUPPORTED.store(false, Ordering::Relaxed);
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
@@ -597,6 +671,7 @@ mod tests {
     fn idle_report_with_resume() -> StateReport {
         StateReport {
             state: AgentState::Idle,
+            message: None,
             session_id: Some("session_fox_1".into()),
             resume_argv: resume_argv_for_session("session_fox_1", |_| None),
         }
@@ -631,5 +706,31 @@ mod tests {
         let calls = herdr.calls();
         assert_eq!(calls.len(), 1, "no state-only retry expected: {calls:?}");
         assert!(calls[0].contains(" -- jcode --resume session_fox_1"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn report_falls_back_to_state_when_herdr_rejects_message() {
+        // Older herdr rejects `--message`; the state must still land, and the
+        // message is dropped from later reports.
+        let herdr = FakeHerdr::with(0, Some(USAGE_ERROR_EXIT_CODE));
+        let mut report = idle_report_with_resume();
+        report.message = Some("2 workers running".into());
+        send_report(&herdr.env, report.clone());
+        assert!(MESSAGE_UNSUPPORTED.load(Ordering::Relaxed));
+        assert!(!RESUME_UNSUPPORTED.load(Ordering::Relaxed));
+
+        send_report(&herdr.env, report);
+        let calls = herdr.calls();
+        assert_eq!(calls.len(), 4, "{calls:?}");
+        assert!(calls[0].contains("--message 2 workers running"));
+        // Resume dropped first, then the message, before state succeeds.
+        assert!(calls[1].contains("--message 2 workers running"));
+        assert!(!calls[1].contains(" -- "));
+        assert!(!calls[2].contains("--message"));
+        // Resume was already dropped by the previous retry.
+        assert!(!calls[2].contains(" -- "));
+        assert!(!calls[3].contains("--message"));
+        assert!(calls[3].contains(" -- jcode --resume session_fox_1"));
     }
 }

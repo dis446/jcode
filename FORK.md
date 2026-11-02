@@ -63,6 +63,7 @@ install entry point.
 | C14 | `/upstream-bump` prompt template | merged in `master` (operator prompt) | upstream `master` (3d16d77db, 0.99.1) | `.gitignore` (unignore `/.jcode/prompts/` so repo-owned templates are trackable). New: `.jcode/prompts/upstream-bump.md`. Read-only workflow: establish the pinned/target state, summarize upstream changes touching every ledger row, state the gains, risk-rate each row and call site, then give a GO/NO-GO/DEFER verdict with an ordered rebase and verification plan. It follows the `FORK.md` upgrade runbook and never runs `jcode update`. Rule 7 keeps operator prompts in dotfiles; this one is fork-workflow-specific and was requested in-repo. No runtime behavior changed. | n/a | yes (operator config, no code) |
 | C15 | Prompt templates appear without a restart | merged in `master` | upstream `master` (3d16d77db, 0.99.1) | `jcode-base`: `prompt_template.rs` (`load_for_working_dir` now walks `source_dirs`; new `source_dirs` and `source_stamp`, with a unit test for add/edit/remove). `jcode-tui`: `app.rs` (`PromptTemplateCache` and `CommandCandidatesCache` gain a stamp), `app/state_ui_runtime.rs` (`prompt_templates` reloads when the source stamp changes), `app/state_ui_input_helpers.rs` (`command_candidates` compares the same stamp before serving its cache), `app/tests/prompt_templates.rs` (new-file test warming both caches first). `docs/PROMPT_TEMPLATES.md` freshness wording. Before this, completion and `/help` cached the template list for the working dir, so a file added mid-session was only usable by typing its exact name (invocation reloaded) and never appeared as a slash command until a directory change. Fingerprint is dir path plus each `.md` file's path, length and mtime; 4 dir stats on a cache lookup. | n/a | yes (small additive freshness check) |
 | C16 | `ask_user_question` stays in the foreground | merged in `master` | upstream `master` (3d16d77db, builds as 0.99.469-dev) | `jcode-app-core`: `agent/tool_handoff.rs` (`blocks_on_user_input`, early return in `auto_background_allowed`), `agent/turn_streaming_mpsc_handoff_tests.rs` (2 tests). `docs/ASK_USER_QUESTION.md` (foreground-only note). The 3 s foreground budget used to adopt every slow tool into the background; for a question that ended the tool call from the model's view while the TUI dialog still owned the client, so the TUI dismissed the dialog on `ToolDone` and the model continued without an answer. Questions now keep the turn in the foreground until answered, cancelled, or `timeout_secs` elapses. | [doc](docs/ASK_USER_QUESTION.md) | yes (one predicate branch) |
+| C17 | herdr reports `working` while delegated work runs | merged in `master` | upstream `master` (3d16d77db, builds as 0.99.484-dev) | `jcode-tui`: `app/terminal_title.rs` (`herdr_agent_status` combines `is_processing()` with active swarm-subtree members and running background-task rows, and composes a compact sidebar message; `sync_herdr_agent_state` skips the derivation outside herdr), `app/tui_state.rs` (`active_swarm_member_count`, own subtree only), `tui/herdr.rs` (`StateReport.message`, `--message` in `report_args`, dedupe includes it, `MESSAGE_UNSUPPORTED` retry). No server/protocol/config change. herdr used to follow only `is_processing()`, so the pane went `idle` while a turn waited on swarm workers or background tasks that were still running. | [plan](plans/herdr-swarm-working-state.md) | yes (additive derivation + optional CLI flag) |
 
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
@@ -283,6 +284,19 @@ through that predicate, so a new tool-registry entry point that forks the
 policy must call it too. Any new interactive tool must also be added to
 `tool/codemode.rs` `EXCLUDED` and `tool/batch.rs` `INTERACTIVE_SUBCALLS`, or a
 script/batch wrapper can still be backgrounded around it.
+C17 verify: `cargo test -p jcode-tui --lib -- tui::herdr
+tui::app::terminal_title` (20 passed; active and terminal swarm statuses,
+running and completed background rows, message formatting, `--message` argument
+order, and both unsupported-field fallbacks), `cargo fmt -p jcode-tui`,
+`cargo clippy -p jcode-tui --all-targets -- -D warnings`. Runtime in a herdr
+pane: spawn a long worker and `herdr agent list` keeps `working` while its
+token count climbs, then flips to `idle` after it completes; a normal streamed
+turn still reports `working` and then `idle`.
+C17 conflict hints: the derivation is `App::herdr_agent_status` in
+`app/terminal_title.rs`, called from the two `handle_tick` paths and
+`draw_full` through `herdr::sync(state, message, session)`. Any new
+delegated-work source (await/wake, shell) must be added to that derivation, and
+any new `StateReport` constructor must set `message`.
 Build env: a host without `openssl-devel` needs `OPENSSL_DIR` pointing at a user-local
 extract, or `--features linux-compat-vendored-openssl` with the perl modules installed;
 `~/dotfiles/scripts/jcode-install.sh` extracts the headers itself when they are missing.

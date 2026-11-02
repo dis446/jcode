@@ -2682,6 +2682,16 @@ pub(crate) fn filter_inline_swarm_subtree(
 }
 
 impl App {
+    /// Active workers in this session's own swarm subtree. Used by the herdr
+    /// state report, which must not be pinned by another session's workers
+    /// sharing the same repository swarm.
+    pub(super) fn active_swarm_member_count(&self) -> usize {
+        self.inline_swarm_members_unticked()
+            .iter()
+            .filter(|member| jcode_tui_render::swarm_gallery::is_active_status(&member.status))
+            .count()
+    }
+
     fn inline_swarm_members_unticked(&self) -> Vec<crate::protocol::SwarmMemberStatus> {
         if self.debug_force_inline_gallery {
             return self.remote_swarm_members.clone();
