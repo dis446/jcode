@@ -68,14 +68,27 @@ install entry point.
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
 
-Current series base: upstream `master` `3d16d77db` (2026-10-30 rebase; 50
-upstream commits after `b61e58b32`). The `Base` column above records the base
-at which each change was developed, not the current tip. All 87 fork commits
-replayed; the only conflict was `jcode-protocol/src/protocol_tests/misc_events.rs`
-where C5's question-wire test and upstream's `context_cap_wire_roundtrip` test
-were appended at the same point (resolved by keeping both). Verified with
-`cargo check --workspace --all-targets`, targeted fork unit tests, and
-`e2e/run.py --suite all`.
+Current series base: upstream `master` `d33832674` (2026-11-02 rebase; 146
+upstream commits after `3d16d77db`). The `Base` column above records the base
+at which each change was developed, not the current tip. All 108 fork commits
+replayed. Conflicts: `agent/tool_handoff.rs` (C16), `server/worker_revive.rs`
+(C2), `protocol/lib.rs` (C5), `app/remote.rs` (C3), `ui_messages.rs` (rustfmt
+only), `src/cli/acp.rs` (C9), `src/cli/ssh.rs` (C8), `src/cli/tui_launch.rs`
+(C8). C16 now overlaps upstream's `ask_user` foreground guard, but the fork's
+`ask_user_question` guard is still required. No ledger row was dropped.
+
+2026-11-02 verify: `cargo check --workspace --all-targets`; stock baseline
+`e2e/run.py --suite baseline` 11/11; fork `--suite all` 38/38;
+`cargo test --test e2e` 62 passed / 7 ignored; `cargo test --test provider_matrix`
+10 passed; `scripts/test_ssh_slash_workflows.sh` passed. Every C1-C9 and
+C15-C17 targeted gate passed. Three paused-clock `handoff_tests`
+(`nonstreaming_background_wait_returns_original_result_after_budget`,
+`ask_user_waits_past_budget_and_returns_its_answer`,
+`callback_paths_honor_custom_and_disabled_budgets`) fail identically on stock
+`d33832674`. Clippy `-D warnings` is red on stock rustc 1.99.1: 20 app-core and
+17 jcode-tui upstream lints. The fork has the same 20 app-core lints and 14 TUI
+lints, so it adds none and still fixes three older TUI lints. Leave the clippy
+gate disabled until upstream clears its rustc-1.99 lints.
 
 C7 verify: docs only; no runtime gate applies. Repo-relative links in
 `docs/TODO_TASK_LIST.md` and the `docs/README.md` entry resolve inside `docs/`.
@@ -117,6 +130,10 @@ sites are the subscribe and resume paths in `server/client_session.rs`, plus
 (resume-dead and scheduled-child paths, plus global-only for a session-less cycle),
 and `src/cli/commands.rs` (resumed runs use the saved session directory). If
 upstream adds a new session setup path, add `register_project_tools_for_dir` there.
+After the 2026-11-02 rebase `worker_revive.rs` revives through
+`SessionManager::get_or_start`, so keep project registration inside that closure
+immediately after `register_mcp_tools_for_dir`. `SessionAgents` is an `Arc`
+manager, not a `RwLock<HashMap>`, so direct `sessions.write()` code will not compile.
 The 2026-10-29 fix added reload identity, stripped `intent`, honoured `JCODE_HOME`,
 decoupled project tools from every MCP opt-out, bounded the timeout around stdin, and
 made the global file default to session cwd. The second 2026-10-29 fix bounded config
@@ -147,7 +164,7 @@ The deferred path keys off the `Clear` request id in `ServerEvent::Done` and
 `ServerEvent::Error`; the pending fields are initialized in both
 `app/tui_lifecycle.rs` constructors. The registry and help entries are one line
 each.
-C4 verify: `cargo test -p jcode-base --lib usage::balance` (6: `/usage` rows
+C4 verify: `cargo test -p jcode-base --lib usage::balance` (8: `/usage` rows
 asserted byte-identical for DeepSeek and Moonshot while the same response
 exposes the chip amount, string and numeric balances, malformed payloads error
 instead of reporting zero, provider key/label resolution, silence for providers
@@ -199,6 +216,11 @@ last `||` arm of `dispatch_single_local_command` and the top of
 wire change is additive (`#[serde(default)]` on both new `InputShell` fields), so
 an older peer still decodes the request. `InputShell` has one other call site:
 `RemoteConnection::send_input_shell_with`.
+After the 2026-11-02 rebase `run_tui_client` gains upstream's turn-envelope
+handling and keeps the fork's `initial_message` argument. Both `src/cli/ssh.rs`
+and `src/cli/tui_launch.rs` change. Upstream host-owned SSH slash workflows now
+own more of the remote dispatch, so re-check project commands on local and SSH
+paths rather than assuming the old `input_dispatch` route is unchanged.
 C8 known gap (2026-10-30 rebase): upstream now snapshots per-session subprocess
 environment (`session_env`) for bash tool launches, but `run_input_shell` has no
 session id, so project command shells and the TUI local `!cmd` path do not
@@ -224,6 +246,10 @@ when upstream adds a `Subscribe` field. The question-wire tests appended at the
 end of `jcode-protocol/src/protocol_tests/misc_events.rs` conflict positionally
 with any upstream test added there; keep both blocks and restore the closing
 `Ok(())`/`}` of the upstream test.
+After the 2026-11-02 rebase the TUI negotiates `supports_turn_identity: true`.
+The interactive forwarder still sends `UserQuestionRequest` flat, but a scoped
+copy can also arrive inside `TurnEvent`. Keep the dialog arm after the unwrap
+boundary. TUI and ACP `Subscribe` literals now include `supports_turn_identity`.
 C9 best-way check: upstream has no prompt-template concept. A skill injects a
 standing system reminder and cannot substitute arguments into a user message;
 a project command runs a shell line and starts no turn; prompt-overlay.md is
@@ -251,6 +277,8 @@ same reason. `TuiState` gains `prompt_template_entries` next to
 before `resolve_acp_skill_invocation` and are advertised by
 `acp_prompt_template_commands`, filtered against the `ACP_BUILTIN_COMMAND_NAMES`
 const and same-named skills.
+After the 2026-11-02 rebase both ACP `Subscribe` literals also carry
+`supports_turn_identity`; keep `supports_user_question` beside it.
 C16 best-way check: `ask_user_question` is fork code (C5); its blocking
 semantics are decided by the upstream foreground-budget policy in
 `auto_background_allowed`, which no config or skill can change for one tool.
@@ -284,6 +312,10 @@ through that predicate, so a new tool-registry entry point that forks the
 policy must call it too. Any new interactive tool must also be added to
 `tool/codemode.rs` `EXCLUDED` and `tool/batch.rs` `INTERACTIVE_SUBCALLS`, or a
 script/batch wrapper can still be backgrounded around it.
+After the 2026-11-02 rebase upstream also guards `name != "ask_user"` in the same
+predicate. Keep both guards. `TOOL_FOREGROUND_BUDGET` is now
+`foreground_budget()` from `[tools] auto_background_timeout_ms`, so tests and
+call sites must use the configured value.
 C17 verify: `cargo test -p jcode-tui --lib -- tui::herdr
 tui::app::terminal_title` (20 passed; active and terminal swarm statuses,
 running and completed background rows, message formatting, `--message` argument
