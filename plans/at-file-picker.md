@@ -1,6 +1,6 @@
 # Plan: native `@file` picker in jcode (pi parity)
 
-Status: draft, not started. Target: local jcode v0.99.1 (same version as the installed binary).
+Status: merged in fork `master` as C1 and installed. Kept as the implementation record.
 Owner: user. Scope: your own build only. Optionally upstream later.
 
 ## Goal
