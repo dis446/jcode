@@ -199,10 +199,7 @@ impl PromptTemplateRegistry {
             ));
             return None;
         }
-        let raw = match read_bounded(path) {
-            Some(raw) => raw,
-            None => return None,
-        };
+        let raw = read_bounded(path)?;
         if raw.len() > MAX_BODY_BYTES {
             crate::logging::warn(&format!(
                 "prompt templates: ignoring {}: larger than {MAX_BODY_BYTES} bytes",

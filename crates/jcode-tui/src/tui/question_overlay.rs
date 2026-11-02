@@ -134,11 +134,7 @@ impl QuestionOverlay {
 
     fn row_count(&self) -> usize {
         let options = self.node().map_or(0, |node| node.options.len());
-        let custom = self
-            .node()
-            .is_some_and(|node| node.allow_custom)
-            .then_some(1)
-            .unwrap_or(0);
+        let custom = usize::from(self.node().is_some_and(|node| node.allow_custom));
         options + custom
     }
 

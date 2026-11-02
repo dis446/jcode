@@ -816,6 +816,14 @@ impl TuiState for BenchState {
         &self.messages
     }
 
+    fn project_command_entries(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    fn prompt_template_entries(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
     fn display_user_message_count(&self) -> usize {
         self.messages
             .iter()

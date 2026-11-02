@@ -9,8 +9,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use tokio::sync::Notify;
 
-static SHELLS: LazyLock<Mutex<HashMap<String, Vec<(u64, Arc<Notify>)>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// One cancellable shell: its request id and wake handle.
+type ShellEntry = (u64, Arc<Notify>);
+/// Running shells per session id.
+type ShellRegistry = HashMap<String, Vec<ShellEntry>>;
+
+static SHELLS: LazyLock<Mutex<ShellRegistry>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// RAII registration for one running shell. Dropping it removes the entry.
 pub struct InputShellGuard {
