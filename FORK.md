@@ -77,6 +77,11 @@ only), `src/cli/acp.rs` (C9), `src/cli/ssh.rs` (C8), `src/cli/tui_launch.rs`
 (C8). C16 now overlaps upstream's `ask_user` foreground guard, but the fork's
 `ask_user_question` guard is still required. No ledger row was dropped.
 
+Pin: `~/dotfiles/jcode/UPSTREAM_VERSION` is `1.0.0-preview.30`, the latest
+upstream release tag. The series base commit `d33832674` is 198 commits later
+and has no tag, so the commit lives here rather than in the pin. Keeping a real
+release in the pin preserves the installer's no-cargo stock fallback.
+
 2026-11-02 verify: `cargo check --workspace --all-targets`; stock baseline
 `e2e/run.py --suite baseline` 11/11; fork `--suite all` 38/38;
 `cargo test --test e2e` 62 passed / 7 ignored; `cargo test --test provider_matrix`
