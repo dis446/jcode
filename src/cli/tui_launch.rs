@@ -134,6 +134,9 @@ mod turn_envelope_tests {
     }
 }
 
+/// The launch knobs are pass-through booleans from the CLI, so grouping them
+/// into a struct would only move the same list somewhere else.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_tui_client(
     resume_session: Option<String>,
     startup_hints: Option<setup_hints::StartupHints>,
