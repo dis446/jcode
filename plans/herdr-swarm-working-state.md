@@ -1,6 +1,7 @@
 # Feature request: herdr pane must show `working` while jcode subagents run
 
-Status: draft, not started. Owner: user. Target: local jcode (`v0.99.472-dev` and later).
+Status: implemented in `master` (unit tests and `e2e --suite all` green; manual herdr-pane check
+pending). Owner: user. Target: local jcode (`v0.99.472-dev` and later).
 Area: `crates/jcode-tui` (herdr integration + TUI state), no server/protocol change.
 
 ## Problem
@@ -58,32 +59,38 @@ When none hold, report `idle` as today. Optional: attach a short human message
 
 ### 1. One derivation function, pure and cheap
 
-Add to `App` (terminal_title.rs or a small `herdr_state.rs`):
+Add to `App` in `terminal_title.rs`:
 
 ```rust
-fn has_delegated_work(&self) -> bool
-fn herdr_agent_state(&self) -> AgentState {
-    if self.is_processing() || self.has_delegated_work() { Working } else { Idle }
+fn active_swarm_member_count(&self) -> usize   // tui_state.rs, inherent impl App
+fn running_background_task_count(&self) -> usize
+fn herdr_agent_status(&self) -> (AgentState, Option<String>) {
+    let workers = self.active_swarm_member_count();
+    let tasks = self.running_background_task_count();
+    let state = if self.is_processing() || workers > 0 || tasks > 0 { Working } else { Idle };
+    (state, herdr_work_message(workers, tasks))
 }
 ```
 
-`sync_herdr_agent_state` calls `herdr_agent_state()` instead of `is_processing()` directly. Nothing
-else in `herdr.rs` changes except the new message field.
+`sync_herdr_agent_state` calls `herdr_agent_status()` instead of `is_processing()` directly.
+`active_swarm_member_count` uses `inline_swarm_members_unticked()`, so only this session's own
+swarm subtree counts, not every worker in a shared repository swarm.
 
 ### 2. Cost
 
-`sync_herdr_agent_state` runs every idle tick and on every full draw, so `has_delegated_work` must
+`sync_herdr_agent_state` runs every idle tick and on every full draw, so the derivation must
 not scan the filesystem. Use only in-memory state:
 
-- `remote_swarm_members` / `inline_swarm_members_unticked()` with `is_active_status`;
-- `crate::background::global().running_snapshot()` (already used for the info widget, cheap: counts);
-- `background_task_rows.iter().any(|r| r.status == Running)`;
-- the await dependency needs disk (`await_dependency::running`), so cache a boolean that is
-  refreshed when the corresponding state changes (swarm member update, background task event,
-  await dependency resolution) rather than reading it per frame. If a cache is not worth it,
-  drop signal 3 from v1: signals 1 and 2 cover the reported scenario.
+- `remote_swarm_members` via `inline_swarm_members_unticked()` with `is_active_status`;
+- `background_task_rows.iter().filter(|r| r.status == Running).count()`. Rows are populated from
+  task lifecycle events in both local and remote clients. `running_snapshot()` is not used: it
+  reads a status file per running task, which is too much for a per-tick path;
+- signal 3 (todo `waiting_on` an await member) is dropped from v1. It needs disk
+  (`await_dependency::running`), and signals 1 and 2 already cover the reported scenario: a parent
+  waiting on a swarm worker or background task is waiting on an active signal 1 or 2 entry.
 
-The existing `sync()` dedupe means the extra call costs one comparison per tick.
+The existing `sync()` dedupe means the extra call costs one comparison per tick. The scan itself
+only runs inside a herdr pane (`herdr::enabled()`), so other terminals pay one environment check.
 
 ### 3. Message (optional, same change)
 
@@ -110,11 +117,12 @@ No change: the interactive TUI never blocks a turn on a user decision (existing 
 
 ## Files to touch
 
-- `crates/jcode-tui/src/tui/app/terminal_title.rs` — state derivation (`sync_herdr_agent_state`).
-- `crates/jcode-tui/src/tui/herdr.rs` — optional `message` field + `report_args` + tests.
-- Possibly `crates/jcode-tui/src/tui/app/tui_state.rs` — expose a cheap
-  `active_swarm_member_count()` / `running_background_count()` helper if the fields are private to
-  another module.
+- `crates/jcode-tui/src/tui/app/terminal_title.rs` — state derivation
+  (`herdr_agent_status`, `running_background_task_count`, `herdr_work_message`) and tests.
+- `crates/jcode-tui/src/tui/herdr.rs` — optional `message` field, `--message` in `report_args`,
+  dedupe and unsupported-message fallback, tests.
+- `crates/jcode-tui/src/tui/app/tui_state.rs` — `active_swarm_member_count()` using the existing
+  own-subtree filter.
 
 No server, protocol, or config change. No user-visible TUI change except the herdr sidebar.
 
@@ -122,15 +130,18 @@ No server, protocol, or config change. No user-visible TUI change except the her
 
 1. Unit tests in `herdr.rs`: `report_args` includes `--message` only when set; existing
    `valid_resume_argv` / seq tests still pass.
-2. TUI unit test (same style as existing `app/tests`): construct an `App` with one synthetic
-   `SwarmMemberStatus { status: "running" }` and assert `herdr_agent_state() == Working`; with all
-   members `completed`, assert `Idle`; with a running background row, assert `Working`.
+2. TUI unit tests in `app/terminal_title.rs`: construct an `App` with one synthetic
+   `SwarmMemberStatus { status: "running" }` and assert `herdr_agent_status() == (Working, ...)`;
+   with terminal statuses (`completed` / `failed` / `stopped` / `ready`), assert `Idle`; with a
+   running background row, assert `Working` and the message; switch the row to completed and assert
+   `Idle`.
 3. Manual in a herdr pane: spawn a long worker (`swarm spawn`), then
    `herdr agent list | jq '.[] | select(.pane_id=="<pane>")'` — status stays `working` for the whole
    worker run, flips to `idle` only after the last member completes, and the sidebar shows the
    message.
 4. Regression: a normal conversational turn still shows `working` while streaming and `idle` after.
-5. `cargo test -p jcode-tui`, `cargo fmt`, `cargo clippy -p jcode-tui`.
+5. Done: `cargo test -p jcode-tui --lib -- tui::herdr tui::app::terminal_title` (20 passed),
+   `cargo fmt -p jcode-tui`, `cargo clippy -p jcode-tui --all-targets -- -D warnings`.
 
 ## Risks / notes
 
@@ -138,8 +149,10 @@ No server, protocol, or config change. No user-visible TUI change except the her
   pane to `working`. The member list already ages out via server status events, and herdr clears
   state on a new session report; still, verify with a stopped/cancelled worker that the state goes
   `idle`.
-- `sync` dedupe compares `(state, session_id)`; adding a message makes it compare the message too,
-  otherwise a changing message with the same state would be dropped. Either include it in the
-  comparison or only send the message with a state transition.
+- `sync` dedupe now compares `(state, message, session_id)`, so a changing message is not dropped.
+- `--message` is newer than the resume command. If a herdr version rejects it with a usage error,
+  `send_report` drops resume first, then the message, retries each time, and remembers the
+  rejection in `MESSAGE_UNSUPPORTED` so later reports skip the flag. State reporting therefore
+  never depends on the message being understood.
 - The current gate `!self.is_remote_client()` (`terminal_title.rs:68`) stays as is; this plan does
   not change which runtime modes report, only what they report.

@@ -61,19 +61,45 @@ fn title_with_metrics(
 }
 
 impl App {
-    /// Tell herdr (when running in a herdr pane) whether this client is
-    /// working or idle and which session to resume. Tick-safe: unchanged
-    /// state is a cheap comparison and reports are sent off-thread.
-    pub(super) fn sync_herdr_agent_state(&self) {
-        if self.suppress_terminal_title_updates || !self.is_remote_client() {
-            return;
-        }
-        let state = if self.is_processing() {
+    /// herdr's `working` state must cover delegated work as well as this
+    /// client's own turn: swarm workers and background tasks keep running
+    /// while the parent waits, and a turn that ends to await them is not
+    /// `is_processing()`. Counts come from in-memory UI state only (no
+    /// filesystem or process probes) because this runs on every tick and
+    /// every full draw.
+    pub(super) fn herdr_agent_status(&self) -> (crate::tui::herdr::AgentState, Option<String>) {
+        let workers = self.active_swarm_member_count();
+        let tasks = self.running_background_task_count();
+        let state = if self.is_processing() || workers > 0 || tasks > 0 {
             crate::tui::herdr::AgentState::Working
         } else {
             crate::tui::herdr::AgentState::Idle
         };
-        crate::tui::herdr::sync(state, self.active_client_session_id());
+        (state, herdr_work_message(workers, tasks))
+    }
+
+    fn running_background_task_count(&self) -> usize {
+        // Rows are kept in memory from task lifecycle events in both local and
+        // remote clients. `running_snapshot()` would read a status file per
+        // task, which is too much for a per-tick path.
+        self.background_task_rows
+            .iter()
+            .filter(|row| row.status == crate::tui::BackgroundTaskRowStatus::Running)
+            .count()
+    }
+
+    /// Tell herdr (when running in a herdr pane) whether this client is
+    /// working or idle and which session to resume. Tick-safe: unchanged
+    /// state is a cheap comparison and reports are sent off-thread.
+    pub(super) fn sync_herdr_agent_state(&self) {
+        if self.suppress_terminal_title_updates
+            || !self.is_remote_client()
+            || !crate::tui::herdr::enabled()
+        {
+            return;
+        }
+        let (state, message) = self.herdr_agent_status();
+        crate::tui::herdr::sync(state, message.as_deref(), self.active_client_session_id());
     }
 
     pub(super) fn set_terminal_title_base(&self, session_id: &str, base: String) {
@@ -134,10 +160,117 @@ impl App {
     }
 }
 
+/// Compact reason shown in herdr's sidebar, e.g. "3 workers running".
+fn herdr_work_message(workers: usize, tasks: usize) -> Option<String> {
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    match (workers, tasks) {
+        (0, 0) => None,
+        (0, tasks) => Some(format!("{tasks} background task{}", plural(tasks))),
+        (workers, 0) => Some(format!("{workers} worker{} running", plural(workers))),
+        (workers, tasks) => Some(format!(
+            "{workers} worker{}, {tasks} background task{}",
+            plural(workers),
+            plural(tasks)
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::message::ToolCall;
+    use crate::protocol::SwarmMemberStatus;
+    use crate::tui::herdr::AgentState;
+    use crate::tui::{BackgroundTaskRow, BackgroundTaskRowStatus};
+
+    fn member(status: &str) -> SwarmMemberStatus {
+        SwarmMemberStatus {
+            session_id: "worker-1".into(),
+            friendly_name: Some("worker-1".into()),
+            status: status.into(),
+            detail: None,
+            task_label: None,
+            role: None,
+            is_headless: Some(true),
+            live_attachments: None,
+            status_age_secs: Some(1),
+            output_tail: None,
+            report_back_to_session_id: None,
+            todo_progress: None,
+            todo_items: Vec::new(),
+            runtime: crate::protocol::SwarmMemberRuntime::default(),
+        }
+    }
+
+    fn app_with_member(status: &str) -> App {
+        let mut app = super::super::tests::create_test_app();
+        app.debug_force_inline_gallery = true;
+        app.remote_swarm_members = vec![member(status)];
+        app
+    }
+
+    #[test]
+    fn herdr_reports_working_while_swarm_member_runs() {
+        for status in ["running", "streaming", "thinking"] {
+            let app = app_with_member(status);
+            assert_eq!(app.herdr_agent_status().0, AgentState::Working, "{status}");
+        }
+        assert_eq!(
+            app_with_member("running").herdr_agent_status().1.as_deref(),
+            Some("1 worker running")
+        );
+    }
+
+    #[test]
+    fn herdr_reports_idle_after_swarm_member_completes() {
+        for status in ["completed", "failed", "stopped", "ready"] {
+            let app = app_with_member(status);
+            assert_eq!(
+                app.herdr_agent_status(),
+                (AgentState::Idle, None),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn herdr_reports_working_for_running_background_task() {
+        let mut app = super::super::tests::create_test_app();
+        app.background_task_rows.push(BackgroundTaskRow {
+            task_id: "task-1".into(),
+            label: "cargo test".into(),
+            percent: None,
+            status: BackgroundTaskRowStatus::Running,
+            completed_at: None,
+        });
+        assert_eq!(
+            app.herdr_agent_status(),
+            (AgentState::Working, Some("1 background task".into()))
+        );
+        app.background_task_rows[0].status = BackgroundTaskRowStatus::Completed;
+        assert_eq!(app.herdr_agent_status(), (AgentState::Idle, None));
+    }
+
+    #[test]
+    fn herdr_work_message_counts_workers_and_tasks() {
+        assert_eq!(herdr_work_message(0, 0), None);
+        assert_eq!(
+            herdr_work_message(1, 0).as_deref(),
+            Some("1 worker running")
+        );
+        assert_eq!(
+            herdr_work_message(3, 0).as_deref(),
+            Some("3 workers running")
+        );
+        assert_eq!(
+            herdr_work_message(0, 2).as_deref(),
+            Some("2 background tasks")
+        );
+        assert_eq!(
+            herdr_work_message(2, 1).as_deref(),
+            Some("2 workers, 1 background task")
+        );
+    }
 
     #[test]
     fn terminal_title_counts_follow_append_remove_and_history_replace() {
