@@ -206,7 +206,10 @@ fn walk(
 ) -> Vec<Candidate> {
     let mut out = Vec::new();
     let mut builder = ignore::WalkBuilder::new(base);
-    builder.hidden(false).follow_links(true).max_depth(max_depth);
+    builder
+        .hidden(false)
+        .follow_links(true)
+        .max_depth(max_depth);
     builder.filter_entry(|e| e.file_name() != ".git");
     let needle = needle.to_lowercase();
     for entry in builder.build().flatten() {

@@ -1005,8 +1005,7 @@ impl Server {
             if session.is_canary {
                 registry.register_selfdev_tools().await;
             }
-            let session_working_dir =
-                session.working_dir.as_ref().map(std::path::PathBuf::from);
+            let session_working_dir = session.working_dir.as_ref().map(std::path::PathBuf::from);
             registry
                 .register_mcp_tools_for_dir(
                     None,

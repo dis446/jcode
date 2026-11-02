@@ -42,13 +42,7 @@ pub(in crate::tui::ui) fn at_file_lines(
 ) -> Vec<Line<'static>> {
     let start = window_start(view.selected, view.rows.len());
     let mut lines = Vec::new();
-    for (i, (name, path, is_dir)) in view
-        .rows
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(VISIBLE_ROWS)
-    {
+    for (i, (name, path, is_dir)) in view.rows.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
         let selected = i == view.selected;
         let marker = if selected { "▸ " } else { "  " };
         let label = if *is_dir && !name.ends_with('/') {
@@ -119,7 +113,11 @@ mod tests {
     fn rows_never_exceed_width() {
         for width in [8usize, 12, 20, 40] {
             for line in at_file_lines(&view(3, 1), width) {
-                let w: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+                let w: usize = line
+                    .spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
                 assert!(w <= width, "row width {w} > {width}");
             }
         }
@@ -131,7 +129,11 @@ mod tests {
             rows: vec![("src".into(), "src/".into(), true)],
             selected: 0,
         };
-        let text: String = at_file_lines(&v, 40)[0].spans.iter().map(|s| s.content.to_string()).collect();
+        let text: String = at_file_lines(&v, 40)[0]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert!(text.contains("src/"));
     }
 }
