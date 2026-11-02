@@ -84,6 +84,42 @@ fn question_request_opens_the_dialog_and_unrelated_tool_done_keeps_it() {
 }
 
 #[test]
+fn turn_scoped_question_request_still_opens_the_dialog() {
+    // Identity-aware clients negotiate `supports_turn_identity`, so the
+    // question request arrives inside `TurnEvent`. The unwrap boundary must
+    // still reach the dialog handler.
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let identity = crate::protocol::TurnIdentity {
+        runtime_generation: "runtime-question".to_string(),
+        turn_id: 1,
+    };
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::TurnStarted {
+            identity: identity.clone(),
+        },
+        &mut remote,
+    );
+    app.handle_server_event(
+        crate::protocol::ServerEvent::TurnEvent {
+            identity,
+            event: Box::new(question_request("ask-scoped", "call-scoped", "Scoped?")),
+        },
+        &mut remote,
+    );
+
+    assert_eq!(
+        app.question_overlay
+            .as_ref()
+            .map(|overlay| overlay.borrow().request_id().to_string()),
+        Some("ask-scoped".to_string())
+    );
+}
+
+#[test]
 fn queued_question_opens_after_the_current_one_finishes() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
