@@ -109,9 +109,7 @@ impl crate::tool::Tool for QuestionProbe {
         _: ToolContext,
     ) -> Result<crate::tool::ToolOutput> {
         tokio::time::sleep(Duration::from_secs(30)).await;
-        Ok(crate::tool::ToolOutput::new(
-            "{\"status\":\"answered\"}",
-        ))
+        Ok(crate::tool::ToolOutput::new("{\"status\":\"answered\"}"))
     }
 }
 

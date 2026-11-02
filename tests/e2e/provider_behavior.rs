@@ -1042,9 +1042,7 @@ async fn ask_user_question_round_trip_through_server() -> Result<()> {
                             Ok(Ok(ServerEvent::ToolDone { id, output, .. }))
                                 if id == "call-question" =>
                             {
-                                anyhow::bail!(
-                                    "question tool finished before the answer: {output}"
-                                );
+                                anyhow::bail!("question tool finished before the answer: {output}");
                             }
                             Ok(Ok(_)) | Ok(Err(_)) => {}
                             Err(_) => {}

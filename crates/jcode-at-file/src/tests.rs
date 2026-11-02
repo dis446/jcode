@@ -75,7 +75,10 @@ fn ranking_order() {
     let paths: Vec<_> = ranked.iter().map(|c| c.path.as_str()).collect();
     // exact(100), starts-with(80) by depth then len (README.txt before docs/readme.md),
     // then the dir at contains 50 + 10.
-    assert_eq!(paths, ["readme.md", "README.txt", "docs/readme.md", "xreadme/"]);
+    assert_eq!(
+        paths,
+        ["readme.md", "README.txt", "docs/readme.md", "xreadme/"]
+    );
 }
 
 #[test]
@@ -156,8 +159,14 @@ fn walker_basics() {
     assert_eq!(run(&d, "rea").first().map(String::as_str), Some("real/"));
     let all = run(&d, "");
     assert!(all.contains(&".env".to_string()), "hidden included");
-    assert!(!all.iter().any(|p| p.starts_with(".git/") || p == ".git/"), ".git excluded");
-    assert!(!all.iter().any(|p| p.starts_with("target/")), "gitignore respected");
+    assert!(
+        !all.iter().any(|p| p.starts_with(".git/") || p == ".git/"),
+        ".git excluded"
+    );
+    assert!(
+        !all.iter().any(|p| p.starts_with("target/")),
+        "gitignore respected"
+    );
     assert!(all.contains(&"src/deep/mod.rs".to_string()), "recursive");
 }
 
