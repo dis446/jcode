@@ -14,6 +14,7 @@ Reference documentation for the jcode codebase.
 
 - Architecture: `SERVER_ARCHITECTURE.md`, `MODULAR_ARCHITECTURE_RFC.md`, `CRATE_OWNERSHIP_BOUNDARIES.md`
 - Swarm: `SWARM_ARCHITECTURE.md`
+- Background tasks and TUI task rows: `BACKGROUND_TASKS.md`
 - Todo task list and follow-ups: `TODO_TASK_LIST.md`, `TODO_FOLLOWUP_CONFIGURATION.md`, `HARNESS.md`
 - Tool surface inventory: `TOOL_INVENTORY.md`, `PROJECT_TOOLS.md`
 - Memory: `MEMORY_ARCHITECTURE.md`, `MEMORY_BUDGET.md`, `MEMORY_INCIDENT_RUNBOOK.md`

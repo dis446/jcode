@@ -27,7 +27,7 @@ this session.
 | `apply_patch` | Multi-file patch from Codex `*** Begin Patch` or unified diff. |
 | `ask_user_question` | Branching questionnaire; blocks until answered or timed out. |
 | `bash` | Run a shell command. |
-| `bg` | List, inspect, wait for, or cancel background tasks. |
+| `bg` | List, inspect, wait for, or cancel [background tasks](BACKGROUND_TASKS.md). |
 | `browser` | Browser automation and task handoff across Chrome, Firefox, Safari, Edge. |
 | `calendar` | Google Calendar: list, view, create, update, delete events. |
 | `codemode` | Sandboxed JavaScript that chains and parallelizes the same tools. |

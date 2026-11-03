@@ -135,7 +135,8 @@ for the widget.
 - Usage bars: subscription usage for the active route, with
   `display.usage_display = "used"` switching bars from remaining to consumed.
 - Memory: `MemoryInfo` activity and last trace.
-- Background tasks: `BackgroundInfo` progress.
+- Background tasks: `BackgroundInfo` progress. See `BACKGROUND_TASKS.md` for the
+  task lifecycle and row behavior.
 - Git: `git_info` / `dual_git_info` snapshots (local and, over SSH, remote), plus
   paths the agent edited this session (`agent_edited`) to mark agent changes.
 - Commits: recent branch history, hidden once the newest commit is older than 24 h.
