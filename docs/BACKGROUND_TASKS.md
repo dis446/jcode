@@ -56,8 +56,8 @@ the command, because the first copy is still running.
 
 1. The manager reserves a task ID and paths for `<id>.status.json` and
    `<id>.output`.
-2. It writes an initial `running` status and publishes a background-started UI
-   activity.
+2. It writes an initial `running` status and, when `notify` is enabled,
+   publishes a background-started UI activity.
 3. The task runs. Spawned tasks execute a closure that writes output to the
    output file. Adopted tasks wrap an existing `JoinHandle<ToolOutput>`.
 4. Progress updates replace the status file's `progress` object and append to a
@@ -65,9 +65,9 @@ the command, because the first copy is still running.
 5. On completion, supersession, or failure, the manager writes a terminal
    status and publishes `BackgroundTaskCompleted`. Cancellation writes a
    terminal `failed` status but does not publish that completion event.
-6. The server fans completion out to attached clients and, when requested,
-   starts or interrupts a turn. The client updates its retained row and status
-   notice.
+6. When `notify` is enabled, the server fans completion out to attached clients.
+   When `wake` is enabled, it starts or interrupts a turn. The client updates
+   its retained row and status notice from those events.
 
 A task is terminal when its status is `completed`, `superseded`, or `failed`.
 `superseded` is currently used by self-dev build reconciliation, where a build
@@ -217,6 +217,10 @@ Cancellation is a terminal failure with error `Cancelled by user`. Completion
 notifications include a short output preview (up to 500 characters); the output
 file remains the source of truth.
 
+`bg cancel` writes the terminal status but does not publish the completion
+event. Confirm cancellation with `bg status` instead of relying on a completion
+card.
+
 ## How the TUI shows it
 
 The TUI keeps a small in-memory row for each task in the active session. Rows are
@@ -263,10 +267,11 @@ also appearing in the Background card.
 
 ### Transcript, status line, and title
 
-- Completion is shown as a status notice and a row update. When the completion
-  is injected into the conversation (for example with `wake`), the transcript
-  renders a compact completion card: a successful task becomes one line with
-  the label and duration, while a failure includes exit and diagnostic detail.
+- When `notify` is enabled, completion is shown as a status notice and a row
+  update. When the completion is injected into the conversation (for example
+  with `wake`), the transcript renders a compact completion card: a successful
+  task becomes one line with the label and duration, while a failure includes
+  exit and diagnostic detail.
 - `bg` progress can also update the transient status notice without adding a
   transcript message.
 - The terminal title and herdr integration count running rows as delegated work.
@@ -301,6 +306,10 @@ See `TOOL_BACKGROUND_TIMEOUT.md` for the configuration edge cases.
   and exit marker.
 - **No attached clients**: the task still runs and writes files. When `notify`
   is on, notification fanout logs a warning if no client receives it.
+- **`notify = false` and `wake = false`**: completion is written to disk but no
+  completion notice is sent to attached clients. A remote client that tracks
+  rows from notifications can retain the last running row until another event
+  or reload. `bg status` is authoritative.
 - **Cancellation race**: the manager serializes status writes so a stale
   `running` snapshot cannot overwrite a terminal status.
 - **Output growth**: the task output file is not trimmed by the manager. Use
