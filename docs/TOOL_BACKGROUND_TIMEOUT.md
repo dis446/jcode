@@ -1,5 +1,9 @@
 # Automatic tool background timeout
 
+For the full background-task lifecycle, storage, progress protocol, and TUI
+presentation, see [BACKGROUND_TASKS.md](BACKGROUND_TASKS.md). This page covers
+only the automatic handoff budget.
+
 Set the foreground budget in `~/.jcode/config.toml`:
 
 ```toml
