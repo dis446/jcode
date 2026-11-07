@@ -899,6 +899,42 @@ impl MultiProvider {
         crate::provider_catalog::openai_compatible_profile_by_id(&fallback?)
     }
 
+    /// Fork (C19): whether the active slot runs a *known catalog* profile
+    /// (opencode-go, deepseek, ...) whose live catalog does not list `model`.
+    ///
+    /// Generic custom endpoints own opaque ids, so a bare id stays on them.
+    /// A catalog profile publishes its ids, so an id it does not serve belongs
+    /// to another provider. Keeping it on the slot made
+    /// `set_model_on_provider(OpenRouter)` rebind to real OpenRouter with a
+    /// bare native id (`claude-opus-5-5`), which the first turn then rejected.
+    fn active_catalog_profile_lacks_model(&self, model: &str) -> bool {
+        let Some(provider) = self.active_openrouter_execution_provider() else {
+            return false;
+        };
+        let Some((_, api_method, _)) = provider.direct_openai_compatible_route_parts() else {
+            return false;
+        };
+        let is_catalog_profile = api_method
+            .strip_prefix("openai-compatible:")
+            .map(str::trim)
+            .and_then(crate::provider_catalog::openai_compatible_profile_by_id)
+            .is_some_and(|profile| profile.id != crate::provider_catalog::OPENAI_COMPAT_PROFILE.id);
+        if !is_catalog_profile {
+            return false;
+        }
+        let model = model.trim();
+        let routes = self.fresh_routes_memo_entry().routes;
+        let profile_routes: Vec<_> = routes
+            .iter()
+            .filter(|route| route.api_method == api_method)
+            .collect();
+        // No catalog yet: unknown, so keep the upstream behaviour.
+        !profile_routes.is_empty()
+            && !profile_routes
+                .iter()
+                .any(|route| route.available && route.model == model)
+    }
+
     /// Return the active direct OpenAI-compatible runtime when its own catalog
     /// serves `model`. Bare model switches must stay on that runtime rather than
     /// rebinding the shared slot to native OpenRouter.
@@ -1249,6 +1285,18 @@ impl MultiProvider {
                     };
                     (openrouter, false)
                 };
+                // Fork (C19): the real aggregator needs vendor-qualified ids
+                // (`anthropic/...`). Reject a bare native id so the switch
+                // fails here instead of on the first turn.
+                if openrouter.supports_provider_routing_features()
+                    && !model.contains('@')
+                    && let Some(qualified) = openrouter_catalog_model_id(model)
+                    && qualified != model
+                {
+                    anyhow::bail!(
+                        "Model '{model}' is not an OpenRouter model id. Use '{qualified}' for OpenRouter, or log in to the provider that serves '{model}'."
+                    );
+                }
                 openrouter.set_model(model)?;
                 if install_openrouter {
                     *self
@@ -2180,6 +2228,7 @@ impl Provider for MultiProvider {
             && self
                 .active_openrouter_execution_provider()
                 .is_some_and(|provider| !provider.supports_provider_routing_features())
+            && !self.active_catalog_profile_lacks_model(requested_model)
         {
             return self.set_model_on_provider(ActiveProvider::OpenRouter, requested_model);
         }

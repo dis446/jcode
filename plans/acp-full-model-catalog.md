@@ -88,10 +88,8 @@ warm) with a 10 s timeout (cold builds measured up to ~7 s) and take its
   plain id routed to opencode-go here, but the rule is not visible to the ACP
   client. Consider provider-qualified ids (`opencode-go/deepseek-v4.1-flash`),
   or a `provider` field per option.
-- **`jcode acp -p/-m` are ignored.** `jcode acp -p opencode-go -m
-  deepseek-v4.1-flash` still starts the session on `claude-opus-5-5`. They
-  should set the new session's initial provider and model, or be removed from
-  `acp --help`.
+- **`jcode acp -p/-m` are ignored.** Fixed by C19: new sessions now apply the
+  flags through `SetModel`, so this works against a shared daemon too.
 - **t3's MCP tools don't reach jcode ACP sessions.** A t3-spawned jcode child
   reported no t3 tools (`delegate_task` etc.). `initialize` advertises
   `mcpCapabilities: {http: false, sse: false}`, so only stdio MCP servers in

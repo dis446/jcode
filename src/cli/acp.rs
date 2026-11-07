@@ -894,14 +894,48 @@ impl AcpRuntime {
             other => anyhow::bail!("expected history after session creation, got {other:?}"),
         };
         let ui_state = fill_model_catalog(&session, ui_state).await;
-        Ok(DaemonSession::new(
+        let session = DaemonSession::new(
             session_id,
             session.reader.into_inner().into_inner(),
             session.writer.into_inner(),
             session.next_request_id.load(Ordering::Relaxed),
         )
         .with_ui_state(ui_state)
-        .with_working_dir(cwd))
+        .with_working_dir(cwd);
+        self.apply_initial_model(&session).await?;
+        Ok(session)
+    }
+
+    /// Fork (C19): `jcode acp -m <model> [-p <provider>]` sets every new
+    /// session's starting model. Spawn-time flags alone only reached a daemon
+    /// that this process started, so a shared daemon ignored them and hosts
+    /// got whatever the daemon's configured default was.
+    fn initial_model_spec(&self) -> Option<String> {
+        let model = self.model.as_deref()?.trim();
+        if model.is_empty() {
+            return None;
+        }
+        Some(match self.provider_choice {
+            ProviderChoice::Auto => model.to_string(),
+            _ if model.contains(':') => model.to_string(),
+            provider => format!("{}:{model}", provider.as_arg_value()),
+        })
+    }
+
+    async fn apply_initial_model(&self, session: &DaemonSession) -> Result<()> {
+        let Some(spec) = self.initial_model_spec() else {
+            return Ok(());
+        };
+        let id = session.next_id();
+        session
+            .send(&Request::SetModel {
+                id,
+                model: spec.clone(),
+            })
+            .await?;
+        wait_for_model_changed(session, id)
+            .await
+            .with_context(|| format!("jcode acp could not select initial model `{spec}`"))
     }
 
     async fn attach_existing_session(

@@ -1,6 +1,7 @@
 mod catalog_discovery;
 use super::*;
 mod catalog_memo;
+mod native_model_switch;
 mod saved_account_selection;
 mod session_binding;
 mod startup_pool;

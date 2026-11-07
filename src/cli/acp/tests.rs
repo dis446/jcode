@@ -158,6 +158,116 @@ async fn acp_sessions_fetch_full_model_catalog_when_history_is_cold() {
 }
 
 #[test]
+fn acp_initial_model_spec_uses_the_explicit_provider() {
+    let runtime = |provider_choice, model: Option<&str>| {
+        AcpRuntime::new(
+            AcpProfile::Standard,
+            provider_choice,
+            model.map(str::to_string),
+            None,
+        )
+    };
+
+    assert_eq!(
+        runtime(ProviderChoice::OpencodeGo, Some("claude-opus-5-5")).initial_model_spec(),
+        Some("opencode-go:claude-opus-5-5".to_string())
+    );
+    assert_eq!(
+        runtime(ProviderChoice::Auto, Some("claude-opus-5-5")).initial_model_spec(),
+        Some("claude-opus-5-5".to_string()),
+        "auto must not invent a provider prefix"
+    );
+    assert_eq!(
+        runtime(
+            ProviderChoice::OpencodeGo,
+            Some("claude:claude-opus-5-5")
+        )
+        .initial_model_spec(),
+        Some("claude:claude-opus-5-5".to_string()),
+        "an explicitly prefixed model must not be prefixed twice"
+    );
+    assert_eq!(
+        runtime(ProviderChoice::Claude, None).initial_model_spec(),
+        None
+    );
+}
+
+#[cfg(unix)]
+async fn mock_daemon_initial_model(
+    server: tokio::net::UnixStream,
+    requested_model: tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    let (reader, mut writer) = server.into_split();
+    let mut reader = BufReader::new(reader);
+    let history = |id: u64| {
+        json!({
+            "type": "history", "id": id, "session_id": "s1", "messages": [],
+            "provider_name": "claude", "provider_model": "claude-opus-5-5",
+            "available_models": ["claude-opus-5-5", "deepseek-v4.1-flash"],
+        })
+    };
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).await.unwrap() == 0 {
+            return;
+        }
+        let responses = match serde_json::from_str::<Request>(&line).unwrap() {
+            Request::Subscribe { id, .. } => vec![json!({"type": "done", "id": id})],
+            Request::GetHistory { id } => vec![history(id)],
+            Request::GetModelCatalog { id, .. } => vec![history(id)],
+            Request::SetModel { id, model } => {
+                requested_model.send(model.clone()).unwrap();
+                vec![json!({
+                    "type": "model_changed", "id": id,
+                    "model": model.rsplit(':').next().unwrap_or(&model),
+                    "provider_name": "Claude",
+                })]
+            }
+            other => panic!("unexpected request {other:?}"),
+        };
+        for response in responses {
+            writer
+                .write_all(format!("{response}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn acp_initial_model_flag_is_applied_to_the_new_session() {
+    let (client, server) = tokio::net::UnixStream::pair().unwrap();
+    let (reader, writer) = client.into_split();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let daemon = tokio::spawn(mock_daemon_initial_model(server, tx));
+    let runtime = AcpRuntime::new(
+        AcpProfile::Standard,
+        ProviderChoice::OpencodeGo,
+        Some("claude-opus-5-5".to_string()),
+        None,
+    );
+
+    let session = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        runtime.create_new_session_connected(PathBuf::from("/acp-test"), reader, writer),
+    )
+    .await
+    .expect("ACP session setup timed out")
+    .expect("ACP session setup succeeds");
+
+    assert_eq!(
+        rx.try_recv().expect("new session must send SetModel"),
+        "opencode-go:claude-opus-5-5"
+    );
+    let state = session.ui_state.lock().await.clone();
+    assert_eq!(state.model.as_deref(), Some("claude-opus-5-5"));
+    assert_eq!(state.provider_name.as_deref(), Some("Claude"));
+    drop(session);
+    daemon.await.unwrap();
+}
+
+#[test]
 fn acp_tool_kind_maps_core_tools() {
     assert_eq!(tool_kind("read"), "read");
     assert_eq!(tool_kind("apply_patch"), "edit");
