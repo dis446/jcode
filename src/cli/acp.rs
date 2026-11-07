@@ -892,6 +892,7 @@ impl AcpRuntime {
             ),
             other => anyhow::bail!("expected history after session creation, got {other:?}"),
         };
+        let ui_state = fill_model_catalog(&session, ui_state).await;
         Ok(DaemonSession::new(
             session_id,
             session.reader.into_inner().into_inner(),
@@ -989,6 +990,7 @@ impl AcpRuntime {
                 }
             }
         }
+        let ui_state = fill_model_catalog(&session, ui_state).await;
 
         Ok(DaemonSession::new(
             attached_id,
@@ -1484,6 +1486,52 @@ async fn request_model_catalog(session: &DaemonSession) -> Result<ServerEvent> {
             _ => {}
         }
     }
+}
+
+/// Upper bound for the post-History model catalog fetch. A cold catalog build
+/// measured up to ~7s on a busy shared server.
+const SESSION_MODEL_CATALOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Replace the History-provided model list with the full catalog.
+///
+/// The daemon only gives the catalog a few milliseconds inside History and
+/// ships an empty list when it is cold, expecting clients to follow up with
+/// `GetModelCatalog` (the TUI does). ACP clients probe `configOptions` once at
+/// `session/new`, so fetch it before answering. On failure or timeout keep the
+/// History state so session setup still succeeds.
+async fn fill_model_catalog(session: &DaemonSession, mut state: SessionUiState) -> SessionUiState {
+    match tokio::time::timeout(
+        SESSION_MODEL_CATALOG_TIMEOUT,
+        request_model_catalog(session),
+    )
+    .await
+    {
+        Ok(Ok(ServerEvent::History {
+            provider_name,
+            provider_model,
+            available_models,
+            ..
+        })) => {
+            if provider_name.is_some() {
+                state.provider_name = provider_name;
+            }
+            if provider_model.is_some() {
+                state.model = provider_model;
+            }
+            if !available_models.is_empty() {
+                state.available_models = available_models;
+            }
+        }
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => crate::logging::info(&format!(
+            "ACP model catalog request failed; using History models: {error}"
+        )),
+        Err(_) => crate::logging::info(&format!(
+            "ACP model catalog not ready within {}s; using History models",
+            SESSION_MODEL_CATALOG_TIMEOUT.as_secs()
+        )),
+    }
+    state
 }
 
 mod session_configuration;
