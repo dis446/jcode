@@ -87,6 +87,22 @@ concurrently would make the shared plan incoherent.
 - Cannot spawn agents. Stopping agents outside their own subtree requires
   `force=true`.
 
+## Worker Models and Effort
+
+- Workers inherit the coordinator's model by default. `agents.swarm_model` can
+  pin a different default; `inherit` and `coordinator` mean the same as unset.
+- A per-spawn `model` is accepted only when `agents.swarm_model_selection` is
+  true and the value exactly matches an `agents.swarm_model_allowlist` entry.
+- Worker reasoning effort defaults to `agents.swarm_effort`, then `low`.
+  A per-spawn `effort` is accepted only when `agents.swarm_effort_selection` is
+  true, and must be one of `none|minimal|low|medium|high|xhigh|max`.
+- A per-spawn override applies only when the request creates a worker. Reused
+  workers keep their current model and effort.
+- With an opt-in off, the field is absent from the tool schema and any supplied
+  value is rejected before dispatch.
+- `swarm status` shows the live value as
+  `Provider: <provider> / <model> (<effort>)`.
+
 ## Agent Lifecycle States
 
 - spawned: session created, not yet ready.
@@ -311,8 +327,8 @@ flowchart TB
 ## File Touch and Intent
 
 - File touch notifications are used for conflict detection.
-- An optional short `intent` field on tool calls is planned to provide a
-  preemptive summary of what a tool is trying to do.
+- An optional short `intent` field on tool calls provides a preemptive summary
+  of what a tool is trying to do.
 - Intent should be brief and is used to build the summary activity feed.
 
 ## Conflict Handling (No Locks)

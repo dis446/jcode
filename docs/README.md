@@ -1,6 +1,8 @@
 # jcode Docs
 
-Reference documentation for the jcode codebase.
+Reference documentation for the jcode codebase. Top-level docs describe current
+behavior; keep them short and update the existing doc instead of adding a
+near-duplicate.
 
 ## Layout
 
@@ -13,13 +15,14 @@ Reference documentation for the jcode codebase.
 ## Key entry points
 
 - Architecture: `SERVER_ARCHITECTURE.md`, `MODULAR_ARCHITECTURE_RFC.md`, `CRATE_OWNERSHIP_BOUNDARIES.md`
-- Swarm: `SWARM_ARCHITECTURE.md`
+- Swarm: `SWARM_ARCHITECTURE.md` (coordination, worker model and effort policy)
+- ACP adapter: `ACP.md` (session setup, model catalogs, switching)
 - Background tasks and TUI task rows: `BACKGROUND_TASKS.md`
 - Todo task list and follow-ups: `TODO_TASK_LIST.md`, `TODO_FOLLOWUP_CONFIGURATION.md`, `HARNESS.md`
 - Tool surface inventory: `TOOL_INVENTORY.md`, `PROJECT_TOOLS.md`
 - Memory: `MEMORY_ARCHITECTURE.md`, `MEMORY_BUDGET.md`, `MEMORY_INCIDENT_RUNBOOK.md`
 - Refactoring and quality: `REFACTORING.md`, `plans/CODE_QUALITY_10_10_PLAN.md`
-- Desktop app: `DESKTOP_APP_ARCHITECTURE.md`, `DESKTOP_CODEBASE_ARCHITECTURE.md`
+- Desktop app: separate repository, not documented here
 - Providers: `PROVIDER_DOCTOR.md`, `AWS_BEDROCK_PROVIDER.md`
 - Prompt-cache telemetry and miss attribution: `KV_CACHE_WATCHER.md`
 - MCP servers: `MCP_REMOTE.md`

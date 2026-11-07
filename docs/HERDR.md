@@ -6,7 +6,15 @@ This covers visible swarm spawns, resume-in-new-terminal, self-development launc
 
 `pane run` starts the session inside the new pane's interactive shell, so the launcher runs `<jcode command> && exit`: the pane closes when Jcode exits cleanly (quit, `swarm stop`), and stays open on a non-zero exit so the error remains readable.
 
-Inside a Herdr pane, the TUI also reports `idle`/`working`, the session id, and its `jcode --resume` command through `"$HERDR_BIN_PATH" pane report-agent`, and releases the pane on quit (`crates/jcode-tui/src/tui/herdr.rs`). Herdr older than 0.9.2 rejects the `--` resume separator as a usage error (exit 2) and drops the whole report. On that specific error Jcode retries once without the resume command and keeps reporting state only for the rest of the process.
+Inside a Herdr pane, the TUI reports `idle`/`working`, a compact message naming
+the delegated work, the session id, and its `jcode --resume` command through
+`"$HERDR_BIN_PATH" pane report-agent`, then releases the pane on quit
+(`crates/jcode-tui/src/tui/herdr.rs`). A turn that waits on live swarm-subtree
+members or running background tasks stays `working`; a background row alone
+does not keep it working. Herdr older than 0.9.2 rejects the `--` resume
+separator as a usage error (exit 2), so Jcode retries once without the resume
+command. Herdr that rejects `--message` is retried without the message, and the
+process reports state only from then on.
 
 ## Current compatibility
 

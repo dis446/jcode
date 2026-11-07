@@ -90,9 +90,9 @@ A template that shadows a skill wins, because the user named a command; the
 skill stays available through `/skills`.
 
 Expansion happens on the client, before the message is sent, so templates work
-in local, remote and SSH sessions and in ACP hosts. The transcript shows the
-expanded body, not the typed `/name`. A body that starts with `!` is sent as
-prompt text; it is never re-dispatched as an input-line shell command.
+in local, remote and SSH sessions and in [ACP hosts](ACP.md). The transcript
+shows the expanded body, not the typed `/name`. A body that starts with `!` is
+sent as prompt text; it is never re-dispatched as an input-line shell command.
 
 ## Limits
 
