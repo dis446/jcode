@@ -99,7 +99,11 @@ targeted gate passed. The same three paused-clock `handoff_tests` fail
 identically on stock preview.199. `chip_position` in the C4 frame test now
 counts display cells, because the stable status row puts `◼`/`│` before the
 chip. Size, panic and swallowed-error ratchets were rebaselined for the
-combined tree.
+combined tree. Relocated hooks are pinned by tests that go red when the hook
+is removed (checked by temporarily disabling each one): `at_file_t_remote_*`
+(C1), `remote_keys_reach_the_dialog_and_send_the_response` (C5),
+`cancel_processing_message_cancels_registered_input_shells` (C8), and
+`chip_keeps_the_stable_status_phase_visible_at_every_width` (C4).
 
 2026-11-02 verify: `cargo check --workspace --all-targets`; stock baseline
 `e2e/run.py --suite baseline` 11/11; fork `--suite all` 38/38;
@@ -118,7 +122,9 @@ C7 verify: docs only; no runtime gate applies. Repo-relative links in
 `docs/TODO_TASK_LIST.md` and the `docs/README.md` entry resolve inside `docs/`.
 
 C1 verify: `e2e/run.py --binary <fork bin> --suite all` (13 `at_file` tests), plus
-`cargo test -p jcode-at-file` (17) and `cargo test -p jcode-tui --lib at_file` (14).
+`cargo test -p jcode-at-file` (17) and `cargo test -p jcode-tui --lib at_file` (16,
+including `at_file_t_remote_*`, which drive `handle_remote_key` and fail if the
+hooks in `key_handling/key_events.rs` go missing).
 C1 conflict hints: hooks sit beside `handle_command_suggestion_key` (two key paths: local
 `input.rs` and remote `key_handling/key_events.rs` since preview.199), `insert_input_text_with_undo` tail, the Backspace arms
 in both paths, `autocomplete()` after `get_suggestions_for`, and the `draw_command_suggestions_overlay`

@@ -208,3 +208,45 @@ fn question_dialog_draws_over_the_transcript_while_the_tool_runs() {
         "transcript leaked through the dialog frame:\n{text}"
     );
 }
+
+/// The remote key path (`remote/key_handling/key_events.rs` since upstream
+/// preview.199) must route keys to the dialog first and send the answer over
+/// the wire, not into the composer.
+#[test]
+fn remote_keys_reach_the_dialog_and_send_the_response() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let peer = remote.take_dummy_peer().unwrap();
+    let (reader, _writer) = peer.into_split();
+    let mut reader = BufReader::new(reader);
+
+    app.handle_server_event(
+        question_request("ask-remote", "call-q", "Which task?"),
+        &mut remote,
+    );
+    assert!(app.question_overlay.is_some());
+
+    rt.block_on(app.handle_remote_key(KeyCode::Char('x'), KeyModifiers::NONE, &mut remote))
+        .unwrap();
+    assert!(app.input().is_empty(), "dialog must own the keys");
+    assert!(app.question_overlay.is_some());
+
+    rt.block_on(app.handle_remote_key(KeyCode::Char('c'), KeyModifiers::CONTROL, &mut remote))
+        .unwrap();
+    assert!(app.question_overlay.is_none(), "cancel must close the dialog");
+
+    let line = rt.block_on(async {
+        let mut line = String::new();
+        tokio::time::timeout(std::time::Duration::from_secs(1), reader.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        line
+    });
+    let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(value["type"], "user_question_response");
+    assert_eq!(value["request_id"], "ask-remote");
+}

@@ -97,3 +97,33 @@ fn no_chip_means_no_extra_chrome() {
     let rows = render(&TestState::default(), 100, 30);
     assert!(chip_position(&rows).is_none(), "{rows:?}");
 }
+
+/// Since preview.199 the status row is upstream's padded stable row. The chip
+/// must narrow it rather than paint over it: the phase label stays visible on
+/// the chip's row, and the row never spills past the frame at any width.
+#[test]
+fn chip_keeps_the_stable_status_phase_visible_at_every_width() {
+    let _env = crate::storage::lock_test_env();
+    let _render = viewport_snapshot_test_lock();
+    let state = TestState {
+        provider_balance_chip: Some(chip()),
+        ..Default::default()
+    };
+    let label_cells = "DeepSeek $27.89".len();
+    for width in [34u16, 40, 60, 80, 120] {
+        let rows = render(&state, width, 20);
+        for row in &rows {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(row.as_str()) <= width as usize,
+                "row wider than frame at {width}: {row:?}"
+            );
+        }
+        let (y, column) = chip_position(&rows).expect("chip renders");
+        assert_eq!(column, width as usize - label_cells - 1, "{:?}", rows[y]);
+        assert!(
+            rows[y].contains("idle"),
+            "phase hidden at {width}: {:?}",
+            rows[y]
+        );
+    }
+}

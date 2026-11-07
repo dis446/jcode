@@ -131,3 +131,61 @@ fn at_file_t_undo_restores_pre_completion_input() {
     app.undo_input_change();
     assert_eq!(app.input, "@readm");
 }
+
+// The remote key path lives in `remote/key_handling/key_events.rs` since
+// upstream preview.199. These drive it directly so a hook lost in a future
+// file split fails here instead of only in the binary e2e suite.
+
+fn remote_type_str(
+    rt: &tokio::runtime::Runtime,
+    app: &mut App,
+    remote: &mut crate::tui::backend::RemoteConnection,
+    s: &str,
+) {
+    for c in s.chars() {
+        rt.block_on(app.handle_remote_key(KeyCode::Char(c), KeyModifiers::NONE, remote))
+            .unwrap();
+    }
+    for _ in 0..200 {
+        if app.at_file_pending.is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.poll_at_file();
+    }
+}
+
+#[test]
+fn at_file_t_remote_enter_accepts_without_submitting() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let (mut app, _d) = at_file_app(&["README.md", "src/main.rs"]);
+    remote_type_str(&rt, &mut app, &mut remote, "@readm");
+    assert_eq!(first_row(&app).as_deref(), Some("README.md"));
+    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::NONE, &mut remote))
+        .unwrap();
+    assert_eq!(app.input, "@README.md ");
+    assert!(app.at_file_view().is_none());
+    assert!(app.queued_messages().is_empty());
+}
+
+#[test]
+fn at_file_t_remote_backspace_refreshes_popup() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let (mut app, _d) = at_file_app(&["README.md"]);
+    remote_type_str(&rt, &mut app, &mut remote, "@readmz");
+    assert!(app.at_file_view().is_none_or(|v| v.rows.is_empty()));
+    rt.block_on(app.handle_remote_key(KeyCode::Backspace, KeyModifiers::NONE, &mut remote))
+        .unwrap();
+    for _ in 0..200 {
+        if app.at_file_pending.is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.poll_at_file();
+    }
+    assert_eq!(first_row(&app).as_deref(), Some("README.md"));
+}
