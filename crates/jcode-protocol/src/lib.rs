@@ -513,6 +513,9 @@ pub struct AgentStatusSnapshot {
     pub provider_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_model: Option<String>,
+    /// Reasoning effort this agent's provider is running with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_effort: Option<String>,
 }
 
 /// Lightweight swarm plan graph summary for planner-friendly reads.

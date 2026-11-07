@@ -1266,9 +1266,9 @@ async fn run_swarm_plan_loop(
                 },
                 message: params.message.clone(),
                 model: params.model.clone(),
-                // Worker effort is not agent-controlled: the server applies
-                // `agents.swarm_effort` (default "low").
-                effort: None,
+                // Effort applies only when this request spawns a worker; a
+                // reused worker keeps its own. The server validates the value.
+                effort: params.effort.clone(),
             };
             match send_request(request).await {
                 Ok(ServerEvent::CommAssignTaskResponse {
@@ -1419,9 +1419,9 @@ async fn spawn_assignment_session(ctx: &ToolContext, params: &CommunicateInput) 
         request_nonce: Some(fresh_spawn_request_nonce(ctx)),
         spawn_mode: params.spawn_mode.clone(),
         model: params.model.clone(),
-        // Worker effort is not agent-controlled: the server applies
-        // `agents.swarm_effort` (default "low").
-        effort: None,
+        // Effort applies only to the worker spawned here. The server validates
+        // the value against `agents.swarm_effort_selection`.
+        effort: params.effort.clone(),
         label: None,
         lane_id: None,
     };
@@ -1775,6 +1775,10 @@ struct CommunicateInput {
     /// Optional model override, authorized by the user's opt-in and exact allowlist.
     #[serde(default)]
     model: Option<String>,
+    /// Optional reasoning effort for newly spawned workers, authorized by
+    /// `agents.swarm_effort_selection` and restricted to known levels.
+    #[serde(default)]
+    effort: Option<String>,
     /// Short human-readable label for a spawned agent shown in swarm UI.
     /// Required and nonblank for the explicit `spawn` action.
     #[serde(default)]
@@ -1839,7 +1843,7 @@ fn canonical_swarm_action(action: &str) -> &str {
 
 #[path = "swarm_model_schema.rs"]
 mod swarm_model_schema;
-use swarm_model_schema::apply_swarm_model_policy;
+use swarm_model_schema::{apply_swarm_effort_policy, apply_swarm_model_policy};
 #[async_trait]
 impl Tool for CommunicateTool {
     fn name(&self) -> &str {
@@ -2006,6 +2010,7 @@ impl Tool for CommunicateTool {
         ]);
 
         apply_swarm_model_policy(&mut schema, &crate::config::config().agents);
+        apply_swarm_effort_policy(&mut schema, &crate::config::config().agents);
         schema
     }
 
@@ -2014,6 +2019,10 @@ impl Tool for CommunicateTool {
         crate::config::config()
             .agents
             .validate_swarm_model_request(params.model.as_deref())
+            .map_err(anyhow::Error::msg)?;
+        crate::config::config()
+            .agents
+            .validate_swarm_effort_request(params.effort.as_deref())
             .map_err(anyhow::Error::msg)?;
 
         // `to_session` and `target_session` both name a single session id. Historically
@@ -2506,9 +2515,9 @@ impl Tool for CommunicateTool {
                     request_nonce: None,
                     spawn_mode: params.spawn_mode.clone(),
                     model: params.model.clone(),
-                    // Worker effort is not agent-controlled: the server applies
-                    // `agents.swarm_effort` (default "low").
-                    effort: None,
+                    // Effort applies only to the worker spawned here. The server
+                    // validates it against `agents.swarm_effort_selection`.
+                    effort: params.effort.clone(),
                     label: Some(label),
                     lane_id: Some(lane_id.clone()),
                 };
@@ -2818,9 +2827,9 @@ impl Tool for CommunicateTool {
                     spawn_if_needed: params.spawn_if_needed,
                     message: params.message.clone(),
                     model: params.model.clone(),
-                    // Worker effort is not agent-controlled: the server applies
-                    // `agents.swarm_effort` (default "low").
-                    effort: None,
+                    // Effort applies only when this request spawns a worker; a
+                    // reused worker keeps its own. The server validates the value.
+                    effort: params.effort.clone(),
                 };
 
                 match send_request(request).await {
@@ -2872,9 +2881,9 @@ impl Tool for CommunicateTool {
                         spawn_if_needed: params.spawn_if_needed,
                         message: params.message.clone(),
                         model: params.model.clone(),
-                        // Worker effort is not agent-controlled: the server applies
-                        // `agents.swarm_effort` (default "low").
-                        effort: None,
+                        // Effort applies only to newly spawned workers. The
+                        // server validates it against the opt-in.
+                        effort: params.effort.clone(),
                     };
 
                     match send_request(request).await {

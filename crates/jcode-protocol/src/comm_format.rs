@@ -418,10 +418,23 @@ pub fn format_comm_status_snapshot(snapshot: &AgentStatusSnapshot) -> String {
         output.push_str(&format!("  Meta: {}\n", meta.join(" · ")));
     }
 
-    if snapshot.provider_name.is_some() || snapshot.provider_model.is_some() {
+    if snapshot.provider_name.is_some()
+        || snapshot.provider_model.is_some()
+        || snapshot.provider_effort.is_some()
+    {
         let provider = snapshot.provider_name.as_deref().unwrap_or("unknown");
         let model = snapshot.provider_model.as_deref().unwrap_or("unknown");
-        output.push_str(&format!("  Provider: {} / {}\n", provider, model));
+        let effort_suffix = snapshot
+            .provider_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty())
+            .map(|effort| format!(" ({effort})"))
+            .unwrap_or_default();
+        output.push_str(&format!(
+            "  Provider: {} / {}{}\n",
+            provider, model, effort_suffix
+        ));
     }
 
     if snapshot.files_touched.is_empty() {

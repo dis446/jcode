@@ -439,8 +439,9 @@ fn format_status_snapshot_includes_activity_and_metadata() {
             is_processing: true,
             current_tool_name: Some("bash".to_string()),
         }),
-        provider_name: None,
-        provider_model: None,
+        provider_name: Some("anthropic".to_string()),
+        provider_model: Some("claude-sonnet-5-5".to_string()),
+        provider_effort: Some("high".to_string()),
     });
 
     assert!(
@@ -461,4 +462,9 @@ fn format_status_snapshot_includes_activity_and_metadata() {
             .contains("Meta: headless · attachments=0 · active=3s ago · status_age=7s · joined=42s")
     );
     assert!(output.output.contains("Files: src/server/comm_sync.rs"));
+    assert!(
+        output
+            .output
+            .contains("Provider: anthropic / claude-sonnet-5-5 (high)")
+    );
 }

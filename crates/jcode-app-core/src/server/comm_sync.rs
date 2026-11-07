@@ -296,16 +296,20 @@ pub(super) async fn handle_comm_status(
             live_activity_snapshot(&connections, &target_session, member.status == "running")
         };
 
-        let (provider_name, provider_model) = {
+        let (provider_name, provider_model, provider_effort) = {
             let agent_sessions = sessions.read().await;
             if let Some(agent) = agent_sessions.get(&target_session) {
                 if let Ok(agent) = agent.try_lock() {
-                    (Some(agent.provider_name()), Some(agent.provider_model()))
+                    (
+                        Some(agent.provider_name()),
+                        Some(agent.provider_model()),
+                        agent.provider_reasoning_effort(),
+                    )
                 } else {
-                    (None, None)
+                    (None, None, None)
                 }
             } else {
-                (None, None)
+                (None, None, None)
             }
         };
 
@@ -326,6 +330,7 @@ pub(super) async fn handle_comm_status(
             activity,
             provider_name,
             provider_model,
+            provider_effort,
         }
     };
 

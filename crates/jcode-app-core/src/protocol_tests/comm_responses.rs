@@ -228,6 +228,7 @@ fn test_comm_status_response_roundtrip() -> Result<()> {
             }),
             provider_name: None,
             provider_model: None,
+            provider_effort: None,
         },
     };
 

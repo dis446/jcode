@@ -579,9 +579,14 @@ swarm_model_allowlist = []
 # Example opt-in:
 # swarm_model_selection = true
 # swarm_model_allowlist = ["openai:gpt-5.5", "claude:claude-sonnet-4-6"]
+# Agent-selected worker reasoning effort is disabled by default. Enable to let
+# the swarm tool's per-spawn `effort` override the worker default. Accepted
+# levels: none|minimal|low|medium|high|xhigh|max.
+swarm_effort_selection = false
 #
 # Reasoning effort for spawned swarm workers ("low", "medium", "high", ...).
-# Agents cannot choose worker effort through the swarm tool. Unset = "low".
+# When agent selection is enabled, a per-spawn effort wins over this value.
+# Unset = "low".
 # Env override: JCODE_SWARM_EFFORT
 # swarm_effort = "low"
 #

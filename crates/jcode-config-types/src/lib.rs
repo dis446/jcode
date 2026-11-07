@@ -513,6 +513,10 @@ pub struct AgentsConfig {
     pub swarm_model_selection: bool,
     /// Exact model/route strings the agent may request. Empty denies all overrides.
     pub swarm_model_allowlist: Vec<String>,
+    /// Opt in to agent-selected worker reasoning effort, restricted to
+    /// [`SWARM_EFFORT_LEVELS`]. Off by default so the coordinating agent cannot
+    /// silently raise (or lower) the user-configured `swarm_effort` budget.
+    pub swarm_effort_selection: bool,
     /// Reasoning effort for spawned swarm workers (`"low"`, `"medium"`,
     /// `"high"`, ...). The swarm tool does not let agents choose worker
     /// effort. Unset means `"low"`.
@@ -640,6 +644,7 @@ impl Default for AgentsConfig {
             swarm_model: None,
             swarm_model_selection: false,
             swarm_model_allowlist: Vec::new(),
+            swarm_effort_selection: false,
             swarm_effort: None,
             swarm_root_effort: None,
             swarm_spawn_mode: SwarmSpawnMode::default(),
@@ -691,17 +696,43 @@ impl AgentsConfig {
         Ok(())
     }
 
+    /// Validate an agent-supplied worker effort before a spawn request reaches
+    /// provider resolution. Unknown levels are rejected rather than silently
+    /// falling back, because a typo would otherwise spend a turn at the wrong
+    /// reasoning effort.
+    pub fn validate_swarm_effort_request(&self, effort: Option<&str>) -> Result<(), &'static str> {
+        let Some(effort) = effort else {
+            return Ok(());
+        };
+        if !self.swarm_effort_selection {
+            return Err(
+                "Agent-selected swarm effort is disabled. Omit effort to use the user-configured default.",
+            );
+        }
+        let effort = effort.trim();
+        if !SWARM_EFFORT_LEVELS.contains(&effort) {
+            return Err(
+                "Requested swarm effort must be one of: none, minimal, low, medium, high, xhigh, max. Omit effort to use the user-configured default.",
+            );
+        }
+        Ok(())
+    }
+
     /// Resolve swarm mode's root effort without allowing the orchestration
     /// sentinel to recurse into itself. Unknown values use the low-effort
     /// default without invalidating other settings.
     pub fn root_effort_for_swarm(&self) -> &'static str {
         let value = self.swarm_root_effort.as_deref().unwrap_or("low").trim();
-        ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        SWARM_EFFORT_LEVELS
             .into_iter()
             .find(|level| level.eq_ignore_ascii_case(value))
             .unwrap_or("low")
     }
 }
+
+/// Reasoning effort levels the config and swarm tool accept.
+pub const SWARM_EFFORT_LEVELS: [&str; 7] =
+    ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// How swarm-created agents should be spawned.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

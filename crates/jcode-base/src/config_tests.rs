@@ -415,6 +415,37 @@ fn swarm_model_selection_requires_opt_in_and_exact_route_match() {
 }
 
 #[test]
+fn swarm_effort_selection_defaults_off_and_requires_known_levels() {
+    let agents = Config::default().agents;
+    assert!(!agents.swarm_effort_selection);
+    assert!(agents.validate_swarm_effort_request(None).is_ok());
+    for effort in ["low", "high", "ultra", "", "  "] {
+        assert!(
+            agents.validate_swarm_effort_request(Some(effort)).is_err(),
+            "{effort:?}"
+        );
+    }
+
+    let cfg: Config = toml::from_str("[agents]\nswarm_effort_selection = true\n").unwrap();
+    for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+        assert!(
+            cfg.agents
+                .validate_swarm_effort_request(Some(effort))
+                .is_ok(),
+            "{effort:?}"
+        );
+    }
+    for effort in ["HIGH", "ultra", "", "  "] {
+        assert!(
+            cfg.agents
+                .validate_swarm_effort_request(Some(effort))
+                .is_err(),
+            "{effort:?}"
+        );
+    }
+}
+
+#[test]
 fn swarm_effort_parses_from_toml_and_env_override() {
     let _guard = crate::storage::lock_test_env();
     let prev = std::env::var_os("JCODE_SWARM_EFFORT");

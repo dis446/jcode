@@ -398,6 +398,9 @@ pub(super) async fn spawn_swarm_agent(
     agents_config
         .validate_swarm_model_request(requested_model.as_deref())
         .map_err(anyhow::Error::msg)?;
+    agents_config
+        .validate_swarm_effort_request(requested_effort.as_deref())
+        .map_err(anyhow::Error::msg)?;
     let resolved_working_dir =
         resolve_spawn_working_dir(working_dir, req_session_id, sessions, swarm_members).await;
     let coordinator = resolve_coordinator_spawn_identity(req_session_id, sessions).await;

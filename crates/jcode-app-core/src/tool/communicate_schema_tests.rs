@@ -54,22 +54,54 @@ fn schema_still_requires_action() {
 #[test]
 fn schema_hides_model_override_by_default_and_keeps_effort_user_configured() {
     let schema = CommunicateTool::new().parameters_schema();
-    let props = schema["properties"]
-        .as_object()
-        .expect("swarm schema should have properties");
 
     let mut schema = schema.clone();
     super::super::apply_swarm_model_policy(&mut schema, &crate::config::AgentsConfig::default());
+    super::super::apply_swarm_effort_policy(&mut schema, &crate::config::AgentsConfig::default());
     assert!(schema["properties"].get("model").is_none());
     // Worker effort is user-configured (`agents.swarm_effort`, default low),
     // never chosen by the coordinating agent.
-    assert!(!props.contains_key("effort"));
+    assert!(schema["properties"].get("effort").is_none());
     assert!(
         schema["properties"]["action"]["enum"]
             .as_array()
             .expect("action enum")
             .contains(&json!("list_models"))
     );
+}
+
+#[test]
+fn schema_exposes_effort_only_with_its_own_opt_in() {
+    let base = CommunicateTool::new().parameters_schema();
+    assert!(base["properties"].get("effort").is_none());
+
+    let mut schema = base.clone();
+    let mut agents = crate::config::AgentsConfig::default();
+    super::super::apply_swarm_effort_policy(&mut schema, &agents);
+    assert!(schema["properties"].get("effort").is_none());
+
+    agents.swarm_effort_selection = true;
+    super::super::apply_swarm_effort_policy(&mut schema, &agents);
+    assert_eq!(
+        schema["properties"]["effort"]["enum"],
+        json!(["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    );
+
+    // Model opt-in does not imply effort opt-in.
+    agents.swarm_effort_selection = false;
+    agents.swarm_model_selection = true;
+    agents.swarm_model_allowlist = vec!["openai:gpt-5.5".to_string()];
+    super::super::apply_swarm_effort_policy(&mut schema, &agents);
+    assert!(schema["properties"].get("effort").is_none());
+}
+
+#[test]
+fn effort_requests_cannot_bypass_the_user_opt_in() {
+    let mut agents = crate::config::AgentsConfig::default();
+    assert!(agents.validate_swarm_effort_request(Some("high")).is_err());
+    agents.swarm_effort_selection = true;
+    assert!(agents.validate_swarm_effort_request(Some("high")).is_ok());
+    assert!(agents.validate_swarm_effort_request(Some("ultra")).is_err());
 }
 
 #[test]
@@ -152,6 +184,30 @@ async fn stale_worker_model_override_is_rejected_before_server_dispatch() {
     let error = result.unwrap_err().to_string();
     assert!(
         error.contains("Agent-selected swarm models are disabled"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn stale_worker_effort_override_is_rejected_before_server_dispatch() {
+    let _env = crate::storage::lock_test_env();
+    let temp = tempfile::TempDir::new().unwrap();
+    let previous = std::env::var_os("JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", temp.path());
+    let tool = CommunicateTool::new();
+    let result = tool
+        .execute(
+            json!({"action": "spawn", "label": "worker", "effort": "high"}),
+            test_ctx("coordinator", temp.path()),
+        )
+        .await;
+    match previous {
+        Some(value) => crate::env::set_var("JCODE_HOME", value),
+        None => crate::env::remove_var("JCODE_HOME"),
+    }
+    let error = result.unwrap_err().to_string();
+    assert!(
+        error.contains("Agent-selected swarm effort is disabled"),
         "{error}"
     );
 }
