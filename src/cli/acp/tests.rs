@@ -767,6 +767,57 @@ fn legacy_models_catalog_is_emitted_alongside_config_options() {
 }
 
 #[test]
+fn native_model_ids_precede_aggregator_ids_in_both_catalogs() {
+    let mut available: Vec<String> = (0..300)
+        .map(|index| format!("vendor/model-{index}"))
+        .collect();
+    available.push("deepseek-v4.1-flash".to_string());
+    available.push("claude-sonnet-5-5".to_string());
+    available.push("openrouter/native-lookalike".to_string());
+    let state = SessionUiState {
+        provider_name: Some("claude".to_string()),
+        model: Some("claude-opus-5-5".to_string()),
+        available_models: available,
+        reasoning_effort: None,
+    };
+
+    let options = session_config_options(&state);
+    let option_values: Vec<&str> = options[0]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|option| option["value"].as_str().unwrap())
+        .collect();
+    let first_vendor = option_values
+        .iter()
+        .position(|model| model.contains('/'))
+        .expect("vendor ids remain listed");
+    for native in ["deepseek-v4.1-flash", "claude-sonnet-5-5"] {
+        let index = option_values
+            .iter()
+            .position(|model| *model == native)
+            .expect("native id is listed");
+        assert!(index < first_vendor, "{native} at {index}, vendor at {first_vendor}");
+        assert!(index < 256, "{native} must survive a 256-entry cap");
+    }
+    assert_eq!(option_values[0], "claude-opus-5-5");
+    assert!(
+        option_values.len() > first_vendor,
+        "provider ids must not be dropped"
+    );
+
+    let mut result = json!({"sessionId": "s1"});
+    insert_session_configuration(&mut result, &state);
+    let model_ids: Vec<&str> = result["models"]["availableModels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|model| model["modelId"].as_str().unwrap())
+        .collect();
+    assert_eq!(model_ids, option_values);
+}
+
+#[test]
 fn config_options_empty_without_model_state() {
     let options = session_config_options(&SessionUiState::default());
     assert!(options.is_empty());

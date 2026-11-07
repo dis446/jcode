@@ -39,10 +39,7 @@ pub(super) fn insert_session_configuration(result: &mut Value, state: &SessionUi
 
 pub(super) fn session_models(state: &SessionUiState) -> Option<Value> {
     let current = state.model.as_deref()?;
-    let mut models = state.available_models.clone();
-    if !models.iter().any(|candidate| candidate == current) {
-        models.insert(0, current.to_string());
-    }
+    let models = ordered_available_models(state, current);
     Some(json!({
         "availableModels": models
             .into_iter()
@@ -50,6 +47,22 @@ pub(super) fn session_models(state: &SessionUiState) -> Option<Value> {
             .collect::<Vec<_>>(),
         "currentModelId": current,
     }))
+}
+
+/// Fork (C20): native ids first, aggregator ids after.
+///
+/// ACP hosts cap how many catalog entries they keep (t3-code keeps the first
+/// 256 plus the current model). OpenRouter publishes 411 `vendor/model` ids,
+/// so leaving them mixed with or ahead of the 80 bare native/subscription ids
+/// hid configured providers behind the cap. Stable sort: the current model is
+/// inserted first when missing, then each group keeps its original order.
+fn ordered_available_models(state: &SessionUiState, current: &str) -> Vec<String> {
+    let mut models = state.available_models.clone();
+    if !models.iter().any(|candidate| candidate == current) {
+        models.insert(0, current.to_string());
+    }
+    models.sort_by_key(|model| model.contains('/'));
+    models
 }
 
 pub(super) fn available_efforts(state: &SessionUiState) -> Vec<&'static str> {
@@ -70,10 +83,7 @@ pub(super) fn session_config_options(state: &SessionUiState) -> Vec<Value> {
     let mut options = Vec::new();
 
     if let Some(model) = state.model.as_deref() {
-        let mut models = state.available_models.clone();
-        if !models.iter().any(|candidate| candidate == model) {
-            models.insert(0, model.to_string());
-        }
+        let models = ordered_available_models(state, model);
         let select_options: Vec<Value> = models
             .iter()
             .map(|name| json!({ "value": name, "name": name }))
