@@ -69,19 +69,37 @@ install entry point.
 Status: planned, in-progress, merged (in `master`), dropped, upstreamed
 (delete from the series on next rebase). Add a row for every new change.
 
-Current series base: upstream `master` `d33832674` (2026-11-02 rebase; 146
-upstream commits after `3d16d77db`). The `Base` column above records the base
-at which each change was developed, not the current tip. All 108 fork commits
-replayed. Conflicts: `agent/tool_handoff.rs` (C16), `server/worker_revive.rs`
-(C2), `protocol/lib.rs` (C5), `app/remote.rs` (C3), `ui_messages.rs` (rustfmt
-only), `src/cli/acp.rs` (C9), `src/cli/ssh.rs` (C8), `src/cli/tui_launch.rs`
-(C8). C16 now overlaps upstream's `ask_user` foreground guard, but the fork's
-`ask_user_question` guard is still required. No ledger row was dropped.
+Current series base: upstream tag `v1.0.0-preview.199` (`7fd42339c`,
+2026-11-07 rebase; 238 upstream commits after `d33832674`). The `Base` column
+above records the base at which each change was developed, not the current tip.
+All 114 fork commits replayed. Upstream split several files for its size
+ratchets, so fork hooks were re-applied by hand at the new sites:
+`app/remote/key_handling.rs` -> `key_handling/key_events.rs` (C1 at-file key
+and Backspace hooks, C5 question key hook), `ui_input::draw_status` ->
+`stable_status::draw_status` (C4 chip, see C4 hints), `client_lifecycle.rs` ->
+`client_processing.rs` (C8 shell cancel hook in `cancel_processing_message`),
+new `client_lifecycle_tests/control_requests.rs` (C8 cancel test; the call now
+takes a third `None` argument) and `mermaid_runtime/protocol_tests.rs` (C6
+tests). Positional conflicts: `client_lifecycle.rs` (C5 capability apply kept
+before upstream's `requested_continuation` init), `client_session.rs` (C2,
+kept upstream's logged stub-load fallback), `usage.rs` (C4 `mod balance;`
+beside upstream `mod banked;`), `misc_events.rs` (C5, both test blocks), safety
+ratchet JSON (rebaselined in a final commit). No ledger row was dropped or
+upstreamed. Upstream ACP still sends no `GetModelCatalog`, so C18 stays.
 
-Pin: `~/dotfiles/jcode/UPSTREAM_VERSION` is `1.0.0-preview.30`, the latest
-upstream release tag. The series base commit `d33832674` is 198 commits later
-and has no tag, so the commit lives here rather than in the pin. Keeping a real
-release in the pin preserves the installer's no-cargo stock fallback.
+Pin: `~/dotfiles/jcode/UPSTREAM_VERSION` is `1.0.0-preview.199`, the tag the
+series sits on, so the pin and the series base agree again. The rollback tag
+`fork-pre-preview199` marks the previous series on `d33832674`.
+
+2026-11-07 verify (preview.199): `cargo check --workspace --all-targets`; stock
+baseline `e2e/run.py --suite baseline` 11/11; fork `--suite all` 38/38;
+`cargo test --test e2e` 62 passed / 7 ignored; `cargo test --test provider_matrix`
+10 passed; `scripts/test_ssh_slash_workflows.sh` passed. Every C1-C9 and C15-C18
+targeted gate passed. The same three paused-clock `handoff_tests` fail
+identically on stock preview.199. `chip_position` in the C4 frame test now
+counts display cells, because the stable status row puts `◼`/`│` before the
+chip. Size, panic and swallowed-error ratchets were rebaselined for the
+combined tree.
 
 2026-11-02 verify: `cargo check --workspace --all-targets`; stock baseline
 `e2e/run.py --suite baseline` 11/11; fork `--suite all` 38/38;
@@ -102,7 +120,7 @@ C7 verify: docs only; no runtime gate applies. Repo-relative links in
 C1 verify: `e2e/run.py --binary <fork bin> --suite all` (13 `at_file` tests), plus
 `cargo test -p jcode-at-file` (17) and `cargo test -p jcode-tui --lib at_file` (14).
 C1 conflict hints: hooks sit beside `handle_command_suggestion_key` (two key paths: local
-`input.rs` and remote `key_handling.rs`), `insert_input_text_with_undo` tail, the Backspace arms
+`input.rs` and remote `key_handling/key_events.rs` since preview.199), `insert_input_text_with_undo` tail, the Backspace arms
 in both paths, `autocomplete()` after `get_suggestions_for`, and the `draw_command_suggestions_overlay`
 call in `ui.rs`. If upstream adds a third key path, the e2e suite fails first.
 
@@ -188,8 +206,12 @@ frame too narrow for it, and no chip means no extra chrome).
 Runtime: a DeepSeek session shows `DeepSeek $NN.NN` at the right edge of the
 status line, dim normally, amber under $5, red at zero; `[display]
 provider_balance = false` hides it; no chip for providers without a balance API.
-C4 conflict hints: the chip hook is the last three lines of `draw_status`
-(before the helper), gated by `TuiState::provider_balance_chip` whose default is
+C4 conflict hints: since preview.199 upstream's `ui_input::draw_status` only
+delegates to `stable_status::draw_status`, whose row pads to the full width. The
+fork wraps that call: `provider_balance_chip_line` picks the label or a
+fallback that leaves at least `PROVIDER_BALANCE_MIN_STATUS_WIDTH` (16) cells,
+the stable row is drawn into the narrowed area, and the chip is drawn in the
+reserved right edge. The chip is gated by `TuiState::provider_balance_chip`, whose default is
 `None` in `tui/mod.rs`; the poller refresh rides beside `refresh_justrust_status`
 in `app/local.rs` and `app/remote.rs`. If upstream changes those lines, the
 unique `refresh_provider_balance` call is the anchor.
@@ -246,7 +268,8 @@ and reviews the result.
 C5 conflict hints: the tool registry gate sits beside `set_desktop_ui_enabled`;
 the capability apply helper sits beside `apply_or_defer_desktop_response_capability`;
 the forwarder match sits in the existing `stdin_req_rx` loop; the TUI hooks sit
-beside the session-picker hooks in the two key paths, `draw_inner`, and the two
+beside the session-picker hooks in the two key paths (remote: top of
+`handle_remote_key_internal` in `key_handling/key_events.rs`), `draw_inner`, and the two
 App constructors. Protocol test struct literals are the first compile failure
 when upstream adds a `Subscribe` field. The question-wire tests appended at the
 end of `jcode-protocol/src/protocol_tests/misc_events.rs` conflict positionally
@@ -390,8 +413,8 @@ See `e2e/README.md`.
 ## Status
 
 - Fork: `github.com/dis446/jcode`, default branch `master` (our commits on top of
-  upstream master `3d16d77db`; base release recorded in
-  `~/dotfiles/jcode/UPSTREAM_VERSION` = 0.99.1).
+  upstream `v1.0.0-preview.199`; base release recorded in
+  `~/dotfiles/jcode/UPSTREAM_VERSION` = 1.0.0-preview.199).
   Checkout `~/Code/Personal/jcode`, `origin` = fork, `upstream` = `1jehuang/jcode`.
 - Install is owned by dotfiles: `~/dotfiles/scripts/jcode-install.sh` clones/updates
   this repo at `master`, builds with cargo, and installs

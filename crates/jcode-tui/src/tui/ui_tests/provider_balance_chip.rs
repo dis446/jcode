@@ -28,10 +28,13 @@ fn render(state: &TestState, width: u16, height: u16) -> Vec<String> {
         .collect()
 }
 
+/// Row and display-cell column of the chip. The status row now starts with
+/// multi-byte glyphs (`◼`, `│`), so a byte offset would not be a cell column.
 fn chip_position(rows: &[String]) -> Option<(usize, usize)> {
-    rows.iter()
-        .enumerate()
-        .find_map(|(y, row)| row.find("DeepSeek $27.89").map(|column| (y, column)))
+    rows.iter().enumerate().find_map(|(y, row)| {
+        row.find("DeepSeek $27.89")
+            .map(|byte| (y, unicode_width::UnicodeWidthStr::width(&row[..byte])))
+    })
 }
 
 #[test]
