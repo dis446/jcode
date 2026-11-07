@@ -66,6 +66,97 @@ async fn acp_new_and_resumed_sessions_advertise_server_failover() {
     }
 }
 
+/// Mock daemon for session setup: the bootstrap History carries a cold
+/// (empty) model list, and the follow-up `GetModelCatalog` either returns the
+/// full catalog or fails.
+#[cfg(unix)]
+async fn mock_daemon_session_setup(
+    server: tokio::net::UnixStream,
+    resume: bool,
+    catalog: Option<Vec<String>>,
+) {
+    let (reader, mut writer) = server.into_split();
+    let mut reader = BufReader::new(reader);
+    let history = |id: u64, models: Vec<String>| {
+        json!({
+            "type": "history", "id": id, "session_id": "s1", "messages": [],
+            "provider_name": "claude", "provider_model": "claude-opus-5-5",
+            "available_models": models,
+        })
+    };
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).await.unwrap() == 0 {
+            return;
+        }
+        let responses = match serde_json::from_str::<Request>(&line).unwrap() {
+            Request::Subscribe { id, .. } if resume => {
+                vec![history(id, Vec::new()), json!({"type": "done", "id": id})]
+            }
+            Request::Subscribe { id, .. } => vec![json!({"type": "done", "id": id})],
+            Request::GetHistory { id } => vec![history(id, Vec::new())],
+            Request::GetModelCatalog { id, .. } => match &catalog {
+                Some(models) => vec![history(id, models.clone())],
+                None => vec![json!({"type": "error", "id": id, "message": "catalog failed"})],
+            },
+            other => panic!("unexpected request {other:?}"),
+        };
+        for response in responses {
+            writer
+                .write_all(format!("{response}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn acp_sessions_fetch_full_model_catalog_when_history_is_cold() {
+    let catalog: Vec<String> = ["claude-opus-5-5", "deepseek-v4.1-flash", "gpt-5.2"]
+        .map(String::from)
+        .to_vec();
+    for resume in [false, true] {
+        for catalog in [Some(catalog.clone()), None] {
+            let (client, server) = tokio::net::UnixStream::pair().unwrap();
+            let (reader, writer) = client.into_split();
+            let daemon = tokio::spawn(mock_daemon_session_setup(server, resume, catalog.clone()));
+            let runtime = AcpRuntime::new(AcpProfile::Standard, ProviderChoice::Claude, None, None);
+            let cwd = PathBuf::from("/acp-test");
+            let session = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                if resume {
+                    runtime
+                        .attach_existing_session_connected("s1".into(), cwd, false, reader, writer)
+                        .await
+                } else {
+                    runtime
+                        .create_new_session_connected(cwd, reader, writer)
+                        .await
+                }
+            })
+            .await
+            .expect("ACP session setup timed out")
+            .expect("ACP session setup succeeds even if the catalog request fails");
+            let state = session.ui_state.lock().await.clone();
+            let expected = catalog.clone().unwrap_or_default();
+            assert_eq!(state.available_models, expected, "resume={resume}");
+            assert_eq!(state.model.as_deref(), Some("claude-opus-5-5"));
+
+            let options = session_config_options(&state);
+            let model_values = options
+                .iter()
+                .find(|option| option["id"] == "model")
+                .expect("model config option")["options"]
+                .as_array()
+                .unwrap()
+                .len();
+            assert_eq!(model_values, expected.len().max(1), "resume={resume}");
+            drop(session);
+            daemon.await.unwrap();
+        }
+    }
+}
+
 #[test]
 fn acp_tool_kind_maps_core_tools() {
     assert_eq!(tool_kind("read"), "read");
